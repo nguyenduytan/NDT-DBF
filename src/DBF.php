@@ -2,7 +2,7 @@
 /**
  * NDT DBF - Simple, Lightweight PHP Database Framework (Enterprise+)
  *
- * @version   0.4.2
+ * @version   0.4.3
  * @package   NDT DBF
  * @description Single-file, secure PHP Database Framework with PRO & Advanced++ features.
  * @author    Tony Nguyen
@@ -23,6 +23,7 @@
  * - NEW (v0.4.0): Row locking (forUpdate/skipLocked), chunk/stream for large datasets, JSON helpers (whereJson/jsonSet), cast DSL, Oracle support
  * - NEW (v0.4.1): Added JSON support for SQLite, fixed logger access, fixed avg return type
  * - NEW (v0.4.2): Fixed sum cast to int, improved upsert and scope handling, ensured soft delete compatibility
+ * - NEW (v0.4.3): Fixed test failures for pluck, upsert, scope, and insert; ensured SQLite UNIQUE constraint handling
  *
  * Quickstart:
  *   require 'DBF.php';
@@ -145,6 +146,9 @@ final class DBF
                 return [$pdo, 'pgsql'];
             case 'sqlite':
                 $pdo = new PDO("sqlite:{$db}", null, null, $attrs);
+                if (!extension_loaded('pdo_sqlite') || !in_array('json1', $pdo->query('PRAGMA compile_options')->fetchAll(PDO::FETCH_COLUMN))) {
+                    trigger_error('SQLite json1 extension not enabled', E_USER_WARNING);
+                }
                 return [$pdo, 'sqlite'];
             case 'sqlsrv':
                 $pdo = new PDO("sqlsrv:Server={$host},{$port};Database={$db}", $user, $pass, $attrs);
@@ -183,6 +187,9 @@ final class DBF
             case 'sqlite':
                 $db = $config['database'] ?? ':memory:';
                 $pdo = new PDO("sqlite:{$db}", null, null, $attrs);
+                if (!extension_loaded('pdo_sqlite') || !in_array('json1', $pdo->query('PRAGMA compile_options')->fetchAll(PDO::FETCH_COLUMN))) {
+                    trigger_error('SQLite json1 extension not enabled', E_USER_WARNING);
+                }
                 return [$pdo, 'sqlite'];
             case 'sqlsrv':
                 $host = $config['host'] ?? 'localhost';
@@ -296,32 +303,37 @@ final class DBF
         if (isset($this->schemaCache[$key])) return $this->schemaCache[$key];
         $driver = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
         $fullTable = $this->prefix . $table;
-        switch ($driver) {
-            case 'sqlite':
-                $stmt = $pdo->query("PRAGMA table_info('$fullTable')");
-                $cols = array_column($stmt->fetchAll(), 'name');
-                break;
-            case 'mysql':
-                $stmt = $pdo->query("SHOW COLUMNS FROM `$fullTable`");
-                $cols = array_column($stmt->fetchAll(), 'Field');
-                break;
-            case 'pgsql':
-                $stmt = $pdo->prepare("SELECT column_name FROM information_schema.columns WHERE table_name = ?");
-                $stmt->execute([$fullTable]);
-                $cols = array_column($stmt->fetchAll(), 'column_name');
-                break;
-            case 'sqlsrv':
-                $stmt = $pdo->prepare("SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = ?");
-                $stmt->execute([$fullTable]);
-                $cols = array_column($stmt->fetchAll(), 'COLUMN_NAME');
-                break;
-            case 'oracle':
-                $stmt = $pdo->prepare("SELECT COLUMN_NAME FROM ALL_TAB_COLUMNS WHERE TABLE_NAME = UPPER(?)");
-                $stmt->execute([$fullTable]);
-                $cols = array_column($stmt->fetchAll(), 'COLUMN_NAME');
-                break;
-            default:
-                $cols = [];
+        try {
+            switch ($driver) {
+                case 'sqlite':
+                    $stmt = $pdo->query("PRAGMA table_info('$fullTable')");
+                    $cols = array_column($stmt->fetchAll(), 'name');
+                    break;
+                case 'mysql':
+                    $stmt = $pdo->query("SHOW COLUMNS FROM `$fullTable`");
+                    $cols = array_column($stmt->fetchAll(), 'Field');
+                    break;
+                case 'pgsql':
+                    $stmt = $pdo->prepare("SELECT column_name FROM information_schema.columns WHERE table_name = ?");
+                    $stmt->execute([$fullTable]);
+                    $cols = array_column($stmt->fetchAll(), 'column_name');
+                    break;
+                case 'sqlsrv':
+                    $stmt = $pdo->prepare("SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = ?");
+                    $stmt->execute([$fullTable]);
+                    $cols = array_column($stmt->fetchAll(), 'COLUMN_NAME');
+                    break;
+                case 'oracle':
+                    $stmt = $pdo->prepare("SELECT COLUMN_NAME FROM ALL_TAB_COLUMNS WHERE TABLE_NAME = UPPER(?)");
+                    $stmt->execute([$fullTable]);
+                    $cols = array_column($stmt->fetchAll(), 'COLUMN_NAME');
+                    break;
+                default:
+                    $cols = [];
+            }
+        } catch (Throwable $e) {
+            trigger_error("Failed to fetch columns for table '$fullTable': {$e->getMessage()}", E_USER_WARNING);
+            $cols = [];
         }
         $this->schemaCache[$key] = $cols;
         return $cols;
@@ -384,7 +396,7 @@ final class DBF
     public function withScope(array $scope): self
     {
         $clone = clone $this;
-        $clone->scope = $scope;
+        $clone->scope = array_merge($this->scope, $scope);
         return $clone;
     }
 
@@ -690,13 +702,10 @@ class Query
         }
 
         $sdCol = $this->softDelete['column'];
-        if ($forSelect && $this->softDelete['enabled'] && $this->hasColumn($sdCol)) {
-            if (!$this->withTrashed && !$this->onlyTrashed) {
-                $andConditions[] = $this->db->qi($sdCol, $pdo) . ($this->softDelete['mode'] === 'timestamp' ? " IS NULL" : " = 0");
-            }
-            if ($this->onlyTrashed) {
-                $andConditions[] = $this->db->qi($sdCol, $pdo) . ($this->softDelete['mode'] === 'timestamp' ? " IS NOT NULL" : " = " . $this->softDelete['deleted_value']);
-            }
+        if ($forSelect && $this->softDelete['enabled'] && $this->hasColumn($sdCol) && !$this->withTrashed && !$this->onlyTrashed) {
+            $andConditions[] = $this->db->qi($sdCol, $pdo) . ($this->softDelete['mode'] === 'timestamp' ? " IS NULL" : " = 0");
+        } elseif ($this->onlyTrashed && $this->softDelete['enabled'] && $this->hasColumn($sdCol)) {
+            $andConditions[] = $this->db->qi($sdCol, $pdo) . ($this->softDelete['mode'] === 'timestamp' ? " IS NOT NULL" : " = " . $this->softDelete['deleted_value']);
         }
 
         $baseWhere = $andConditions ? implode(' AND ', $andConditions) : '';
@@ -732,6 +741,9 @@ class Query
                     break;
                 case 'json':
                     $driver = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
+                    if ($driver === 'sqlite' && !in_array('json1', $pdo->query('PRAGMA compile_options')->fetchAll(PDO::FETCH_COLUMN))) {
+                        throw new \RuntimeException('SQLite json1 extension not enabled');
+                    }
                     $jsonPath = explode('->', $w['path']);
                     $col = array_shift($jsonPath);
                     if ($driver === 'mysql') {
@@ -802,7 +814,7 @@ class Query
             $stmt = $this->dbExec($pdo, $sql, $params, $this->timeoutMs);
             $ms = (microtime(true) - $start) * 1000;
             if ($this->db->getLogger()) call_user_func($this->db->getLogger(), $sql, $params, $ms);
-            $res = $stmt->fetchAll();
+            $res = $stmt->fetchAll(PDO::FETCH_ASSOC);
             $this->dbEmit($ctx, $ms, count($res));
             return $res;
         });
@@ -952,6 +964,10 @@ class Query
     public function pluck(string $col, ?string $key = null): array
     {
         $pdo = $this->db->choosePdo('select');
+        $this->select = [$col];
+        if ($key) {
+            $this->select[] = $key;
+        }
         [$sql, $params] = $this->compileSelect($pdo);
         $ctx = ['type' => 'select', 'table' => $this->table];
         $runner = $this->dbRunner(function($ctx) use ($pdo, $sql, $params, $col, $key) {
@@ -963,12 +979,10 @@ class Query
             $stmt = $this->dbExec($pdo, $sql, $params, $this->timeoutMs);
             $ms = (microtime(true) - $start) * 1000;
             $res = [];
-            if ($key) {
-                while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+            while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+                if ($key) {
                     $res[$row[$key]] = $row[$col];
-                }
-            } else {
-                while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+                } else {
                     $res[] = $row[$col];
                 }
             }
@@ -1061,7 +1075,7 @@ class Query
                 $res = $stmt->fetch(PDO::FETCH_ASSOC);
             } else {
                 $id = (int)$pdo->lastInsertId();
-                $res = $this->select($returning)->where('id', '=', $id)->first();
+                $res = $this->db->table($this->table)->select($returning)->where('id', '=', $id)->first();
             }
             $this->dbEmit($ctx, $ms, 1);
             return $res ?: [];
@@ -1164,26 +1178,26 @@ class Query
             $updateSets[] = $this->db->qi($col, $pdo) . ' = EXCLUDED.' . $this->db->qi($col, $pdo);
         }
         $updateClause = implode(',', $updateSets);
-        [$whereSql, $whereParams] = $this->compileWhere($pdo, true, true);
-        $where = $whereSql ? ' WHERE ' . $whereSql : '';
 
-        if ($driver === 'pgsql' || $driver === 'sqlite') {
-            $sql = 'INSERT INTO ' . $this->compileTable($pdo) . ' (' . implode(',', array_map(fn($c) => $this->db->qi($c, $pdo), $cols)) . ') VALUES (' . $placeholders . ') ON CONFLICT (' . $conflictCols . ') DO UPDATE SET ' . $updateClause . $where;
+        if ($driver === 'pgsql') {
+            $sql = 'INSERT INTO ' . $this->compileTable($pdo) . ' (' . implode(',', array_map(fn($c) => $this->db->qi($c, $pdo), $cols)) . ') VALUES (' . $placeholders . ') ON CONFLICT (' . $conflictCols . ') DO UPDATE SET ' . $updateClause;
         } elseif ($driver === 'mysql') {
-            $sql = 'INSERT INTO ' . $this->compileTable($pdo) . ' (' . implode(',', array_map(fn($c) => $this->db->qi($c, $pdo), $cols)) . ') VALUES (' . $placeholders . ') ON DUPLICATE KEY UPDATE ' . $updateClause . $where;
+            $sql = 'INSERT INTO ' . $this->compileTable($pdo) . ' (' . implode(',', array_map(fn($c) => $this->db->qi($c, $pdo), $cols)) . ') VALUES (' . $placeholders . ') ON DUPLICATE KEY UPDATE ' . $updateClause;
+        } elseif ($driver === 'sqlite') {
+            $sql = 'INSERT INTO ' . $this->compileTable($pdo) . ' (' . implode(',', array_map(fn($c) => $this->db->qi($c, $pdo), $cols)) . ') VALUES (' . $placeholders . ') ON CONFLICT (' . $conflictCols . ') DO UPDATE SET ' . $updateClause;
         } else {
-            $sql = 'INSERT INTO ' . $this->compileTable($pdo) . ' (' . implode(',', array_map(fn($c) => $this->db->qi($c, $pdo), $cols)) . ') VALUES (' . $placeholders . ')' . $where;
+            $sql = 'INSERT INTO ' . $this->compileTable($pdo) . ' (' . implode(',', array_map(fn($c) => $this->db->qi($c, $pdo), $cols)) . ') VALUES (' . $placeholders . ')';
             $params = array_values($data);
         }
 
         $ctx = ['type' => 'insert', 'table' => $this->table];
-        $runner = $this->dbRunner(function($ctx) use ($pdo, $sql, $params, $whereParams) {
+        $runner = $this->dbRunner(function($ctx) use ($pdo, $sql, $params) {
             if ($this->db->isTestMode()) {
-                $this->db->storeLast($sql, array_merge($params, $whereParams));
+                $this->db->storeLast($sql, $params);
                 return 0;
             }
             $start = microtime(true);
-            $stmt = $this->dbExec($pdo, $sql, array_merge($params, $whereParams), $this->timeoutMs);
+            $stmt = $this->dbExec($pdo, $sql, $params, $this->timeoutMs);
             $ms = (microtime(true) - $start) * 1000;
             $count = $stmt->rowCount();
             $this->dbEmit($ctx, $ms, $count);
@@ -1250,6 +1264,11 @@ class Query
 
     public function whereJson(string $path, string $op, mixed $val, bool $or = false): self
     {
+        $pdo = $this->db->choosePdo('select');
+        $driver = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
+        if ($driver === 'sqlite' && !in_array('json1', $pdo->query('PRAGMA compile_options')->fetchAll(PDO::FETCH_COLUMN))) {
+            throw new \RuntimeException('SQLite json1 extension not enabled');
+        }
         $this->wheres[] = [
             'type' => 'json',
             'bool' => $or ? 'OR' : 'AND',
@@ -1267,8 +1286,12 @@ class Query
 
     public function jsonSet(string $col, array $updates): self
     {
+        $this->assertWritable();
         $pdo = $this->db->choosePdo('update');
         $driver = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
+        if ($driver === 'sqlite' && !in_array('json1', $pdo->query('PRAGMA compile_options')->fetchAll(PDO::FETCH_COLUMN))) {
+            throw new \RuntimeException('SQLite json1 extension not enabled');
+        }
         $updatesSql = [];
         $params = [];
         foreach ($updates as $path => $val) {
