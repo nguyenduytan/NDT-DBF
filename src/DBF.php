@@ -2,7 +2,7 @@
 /**
  * NDT DBF - Simple, Lightweight PHP Database Framework (Enterprise+)
  *
- * @version   0.4.7
+ * @version   0.4.8
  * @package   NDT DBF
  * @description Single-file, secure PHP Database Framework with PRO & Advanced++ features.
  * @author    Tony Nguyen
@@ -28,6 +28,7 @@
  * - NEW (v0.4.5): Enhanced insertGet for SQLite lastInsertId, strengthened upsert, explicit scope priority, suppressed deprecated warnings
  * - NEW (v0.4.6): Fixed restore() for soft-deleted records, improved warning suppression in schema queries
  * - NEW (v0.4.7): Fixed soft delete to ensure deleted_at is set, enhanced restore() to include onlyTrashed condition, further suppressed SQLite warnings
+ * - NEW (v0.4.8): Fixed delete() to ensure softDelete() is called, improved compileWhere() for onlyTrashed precedence, added debug logging for queries
  *
  * Quickstart:
  *   require 'DBF.php';
@@ -155,6 +156,7 @@ final class DBF
             case 'sqlite':
                 $pdo = new PDO("sqlite:{$db}", null, null, $attrs);
                 @$pdo->exec('PRAGMA foreign_keys = ON'); // Suppress warning
+                @$pdo->exec('PRAGMA journal_mode = WAL'); // Suppress warning
                 return [$pdo, 'sqlite'];
             case 'sqlsrv':
                 $pdo = new PDO("sqlsrv:Server={$host},{$port};Database={$db}", $user, $pass, $attrs);
@@ -198,6 +200,7 @@ final class DBF
                 $db = $config['database'] ?? ':memory:';
                 $pdo = new PDO("sqlite:{$db}", null, null, $attrs);
                 @$pdo->exec('PRAGMA foreign_keys = ON'); // Suppress warning
+                @$pdo->exec('PRAGMA journal_mode = WAL'); // Suppress warning
                 return [$pdo, 'sqlite'];
             case 'sqlsrv':
                 $host = $config['host'] ?? 'localhost';
@@ -756,25 +759,28 @@ class Query
     private function compileWhere(PDO $pdo, bool $includeScope, bool $forSelect = false): array
     {
         $bind = [];
-        $andConditions = [];
+        $conditions = [];
 
-        // Apply scope first
+        // Apply onlyTrashed first for restore operations
+        $sdCol = $this->softDelete['column'];
+        if ($this->onlyTrashed && $this->softDelete['enabled'] && $this->hasColumn($sdCol)) {
+            $conditions[] = $this->db->qi($sdCol, $pdo) . ($this->softDelete['mode'] === 'timestamp' ? " IS NOT NULL" : " = " . $this->softDelete['deleted_value']);
+        }
+
+        // Apply scope
         if ($includeScope && $this->scope) {
             foreach ($this->scope as $k => $v) {
-                $andConditions[] = $this->db->qi($k, $pdo) . " = ?";
+                $conditions[] = $this->db->qi($k, $pdo) . " = ?";
                 $bind[] = $v;
             }
         }
 
-        // Apply soft delete after scope for select queries
-        $sdCol = $this->softDelete['column'];
+        // Apply soft delete for select queries (unless withTrashed or onlyTrashed)
         if ($forSelect && $this->softDelete['enabled'] && $this->hasColumn($sdCol) && !$this->withTrashed && !$this->onlyTrashed) {
-            $andConditions[] = $this->db->qi($sdCol, $pdo) . ($this->softDelete['mode'] === 'timestamp' ? " IS NULL" : " = 0");
-        } elseif ($this->onlyTrashed && $this->softDelete['enabled'] && $this->hasColumn($sdCol)) {
-            $andConditions[] = $this->db->qi($sdCol, $pdo) . ($this->softDelete['mode'] === 'timestamp' ? " IS NOT NULL" : " = " . $this->softDelete['deleted_value']);
+            $conditions[] = $this->db->qi($sdCol, $pdo) . ($this->softDelete['mode'] === 'timestamp' ? " IS NULL" : " = 0");
         }
 
-        $baseWhere = $andConditions ? implode(' AND ', $andConditions) : '';
+        $baseWhere = $conditions ? implode(' AND ', $conditions) : '';
         $parts = $baseWhere ? [$baseWhere] : [];
 
         foreach ($this->wheres as $idx => $w) {
@@ -1187,10 +1193,10 @@ class Query
     public function delete(): int
     {
         $this->assertWritable();
+        $pdo = $this->db->choosePdo('delete');
         if ($this->softDelete['enabled'] && $this->hasColumn($this->softDelete['column'])) {
             return $this->softDelete();
         }
-        $pdo = $this->db->choosePdo('delete');
         [$whereSql, $params] = $this->compileWhere($pdo, true, false);
         $where = $whereSql ? ' WHERE ' . $whereSql : '';
         $sql = 'DELETE FROM ' . $this->compileTable($pdo) . $where;
@@ -1230,6 +1236,9 @@ class Query
             $ms = (microtime(true) - $start) * 1000;
             $count = $stmt->rowCount();
             $this->dbEmit($ctx, $ms, $count);
+            if ($this->db->getLogger()) {
+                call_user_func($this->db->getLogger(), $sql, $params, $ms);
+            }
             return $count;
         });
         return $runner($ctx);
@@ -1260,6 +1269,9 @@ class Query
             $ms = (microtime(true) - $start) * 1000;
             $count = $stmt->rowCount();
             $this->dbEmit($ctx, $ms, $count);
+            if ($this->db->getLogger()) {
+                call_user_func($this->db->getLogger(), $sql, $params, $ms);
+            }
             return $count;
         });
         return $runner($ctx);
@@ -1315,6 +1327,9 @@ class Query
             $ms = (microtime(true) - $start) * 1000;
             $count = $stmt->rowCount();
             $this->dbEmit($ctx, $ms, $count);
+            if ($this->db->getLogger()) {
+                call_user_func($this->db->getLogger(), $sql, $params, $ms);
+            }
             return $count;
         });
         return $runner($ctx);
@@ -1372,6 +1387,9 @@ class Query
                 yield $row;
             }
             $this->dbEmit($ctx, $ms, $count);
+            if ($this->db->getLogger()) {
+                call_user_func($this->db->getLogger(), $sql, $params, $ms);
+            }
         });
         yield from $runner($ctx);
     }
@@ -1437,6 +1455,9 @@ class Query
             $ms = (microtime(true) - $start) * 1000;
             $count = $stmt->rowCount();
             $this->dbEmit($ctx, $ms, $count);
+            if ($this->db->getLogger()) {
+                call_user_func($this->db->getLogger(), $sql, $params, $ms);
+            }
             return $this;
         });
         return $runner($ctx);
