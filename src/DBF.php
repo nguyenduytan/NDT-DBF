@@ -2,33 +2,12 @@
 /**
  * NDT DBF - Simple, Lightweight PHP Database Framework (Enterprise+)
  *
- * @version   0.4.8
+ * @version   0.0.1
  * @package   NDT DBF
  * @description Single-file, secure PHP Database Framework with PRO & Advanced++ features.
  * @author    Tony Nguyen
  * @link      https://ndtan.net
  * @license   MIT
- *
- * Highlights:
- * - Single file, zero external deps (PDO required)
- * - Secure by default: prepared statements, identifier quoting per driver, IN-guard, policy/scope
- * - PRO: Query Builder (select/where/join/group/having/order/limit/offset), raw SQL (positional & named)
- * - PRO: Transactions with exponential backoff on deadlocks
- * - PRO: Upsert (MySQL/PG/SQLite) + fallback, insertMany, insertGet (RETURNING on PG/SQLite)
- * - PRO: Keyset pagination helper
- * - PRO: Logger & middleware pipeline; Metrics hook
- * - PRO: Master/Replica routing (auto/manual)
- * - Advanced++: Readonly/Maintenance mode; Soft Delete guard (withTrashed/onlyTrashed/restore/forceDelete)
- * - Advanced++: Per-query timeout (MySQL/PG best-effort)
- * - NEW (v0.4.0): Row locking (forUpdate/skipLocked), chunk/stream for large datasets, JSON helpers (whereJson/jsonSet), cast DSL, Oracle support
- * - NEW (v0.4.1): Added JSON support for SQLite, fixed logger access, fixed avg return type
- * - NEW (v0.4.2): Fixed sum cast to int, improved upsert and scope handling, ensured soft delete compatibility
- * - NEW (v0.4.3): Fixed test failures for pluck, upsert, scope, and insert; ensured SQLite constraint handling
- * - NEW (v0.4.4): Fixed insertGet fallback, upsert UNIQUE constraint check, and scope precedence; improved warning handling
- * - NEW (v0.4.5): Enhanced insertGet for SQLite lastInsertId, strengthened upsert, explicit scope priority, suppressed deprecated warnings
- * - NEW (v0.4.6): Fixed restore() for soft-deleted records, improved warning suppression in schema queries
- * - NEW (v0.4.7): Fixed soft delete to ensure deleted_at is set, enhanced restore() to include onlyTrashed condition, further suppressed SQLite warnings
- * - NEW (v0.4.8): Fixed delete() to ensure softDelete() is called, improved compileWhere() for onlyTrashed precedence, added debug logging for queries
  *
  * Quickstart:
  *   require 'DBF.php';
@@ -88,8 +67,7 @@ final class DBF
         'deleted_value' => 1,
     ];
 
-    /** --- Test Mode & last query tracking --- */
-    private bool $testMode = false;
+    /** @var array Last query tracking for debugging */
     private string $lastQueryString = '';
     private array $lastQueryParams = [];
 
@@ -780,34 +758,32 @@ class Query
             $conditions[] = $this->db->qi($sdCol, $pdo) . ($this->softDelete['mode'] === 'timestamp' ? " IS NULL" : " = 0");
         }
 
-        $baseWhere = $conditions ? implode(' AND ', $conditions) : '';
-        $parts = $baseWhere ? [$baseWhere] : [];
-
+        // Apply user-defined wheres
         foreach ($this->wheres as $idx => $w) {
-            $prefix = (empty($parts) && $idx === 0) ? '' : ' ' . $w['bool'] . ' ';
+            $prefix = (empty($conditions) && $idx === 0) ? '' : ' ' . $w['bool'] . ' ';
             switch ($w['type']) {
                 case 'basic':
-                    $parts[] = $prefix . $this->db->qi($w['col'], $pdo) . ' ' . $w['op'] . ' ?';
+                    $conditions[] = $prefix . $this->db->qi($w['col'], $pdo) . ' ' . $w['op'] . ' ?';
                     $bind[] = $w['val'];
                     break;
                 case 'in':
                     $vals = $w['vals'];
                     if (count($vals) > $this->db->guardMaxIn()) throw new \LengthException("whereIn list exceeds " . $this->db->guardMaxIn() . " items");
                     if (empty($vals)) {
-                        $parts[] = $prefix . ($w['not'] ? '1=1' : '1=0');
+                        $conditions[] = $prefix . ($w['not'] ? '1=1' : '1=0');
                         break;
                     }
                     $qs = implode(',', array_fill(0, count($vals), '?'));
-                    $parts[] = $prefix . $this->db->qi($w['col'], $pdo) . ($w['not'] ? ' NOT IN (' : ' IN (') . $qs . ')';
+                    $conditions[] = $prefix . $this->db->qi($w['col'], $pdo) . ($w['not'] ? ' NOT IN (' : ' IN (') . $qs . ')';
                     $bind = array_merge($bind, array_values($vals));
                     break;
                 case 'null':
-                    $parts[] = $prefix . $this->db->qi($w['col'], $pdo) . ($w['not'] ? ' IS NOT NULL' : ' IS NULL');
+                    $conditions[] = $prefix . $this->db->qi($w['col'], $pdo) . ($w['not'] ? ' IS NOT NULL' : ' IS NULL');
                     break;
                 case 'between':
                     $pair = $w['pair'];
                     if (!is_array($pair) || count($pair) !== 2) throw new \InvalidArgumentException('whereBetween requires [min,max]');
-                    $parts[] = $prefix . $this->db->qi($w['col'], $pdo) . ($w['not'] ? ' NOT BETWEEN ? AND ?' : ' BETWEEN ? AND ?');
+                    $conditions[] = $prefix . $this->db->qi($w['col'], $pdo) . ($w['not'] ? ' NOT BETWEEN ? AND ?' : ' BETWEEN ? AND ?');
                     $bind[] = $pair[0];
                     $bind[] = $pair[1];
                     break;
@@ -820,13 +796,13 @@ class Query
                     $col = array_shift($jsonPath);
                     if ($driver === 'mysql') {
                         $path = implode('.', $jsonPath);
-                        $parts[] = $prefix . "JSON_EXTRACT(" . $this->db->qi($col, $pdo) . ", '$.{$path}') " . $w['op'] . " ?";
+                        $conditions[] = $prefix . "JSON_EXTRACT(" . $this->db->qi($col, $pdo) . ", '$.{$path}') " . $w['op'] . " ?";
                     } elseif ($driver === 'pgsql') {
                         $path = implode('->>', $jsonPath);
-                        $parts[] = $prefix . $this->db->qi($col, $pdo) . "->>'{$path}' " . $w['op'] . " ?";
+                        $conditions[] = $prefix . $this->db->qi($col, $pdo) . "->>'{$path}' " . $w['op'] . " ?";
                     } elseif ($driver === 'sqlite') {
                         $path = implode('.', $jsonPath);
-                        $parts[] = $prefix . "json_extract(" . $this->db->qi($col, $pdo) . ", '$.{$path}') " . $w['op'] . " ?";
+                        $conditions[] = $prefix . "json_extract(" . $this->db->qi($col, $pdo) . ", '$.{$path}') " . $w['op'] . " ?";
                     } else {
                         throw new \RuntimeException('whereJson not supported on ' . $driver);
                     }
@@ -834,7 +810,8 @@ class Query
                     break;
             }
         }
-        $sql = implode('', $parts) ?: '';
+
+        $sql = implode('', $conditions) ?: '';
         return [$sql, $bind];
     }
 
@@ -1211,6 +1188,9 @@ class Query
             $ms = (microtime(true) - $start) * 1000;
             $count = $stmt->rowCount();
             $this->dbEmit($ctx, $ms, $count);
+            if ($this->db->getLogger()) {
+                call_user_func($this->db->getLogger(), $sql, $params, $ms);
+            }
             return $count;
         });
         return $runner($ctx);
@@ -1218,7 +1198,14 @@ class Query
 
     private function softDelete(): int
     {
+        $this->assertWritable();
+        if (!$this->softDelete['enabled']) {
+            throw new \RuntimeException('Soft delete is not enabled');
+        }
         $col = $this->softDelete['column'];
+        if (!$this->hasColumn($col)) {
+            throw new \RuntimeException("Soft delete column '$col' does not exist in table '$this->table'");
+        }
         $val = $this->softDelete['mode'] === 'timestamp' ? date('Y-m-d H:i:s') : $this->softDelete['deleted_value'];
         $pdo = $this->db->choosePdo('update');
         [$whereSql, $whereParams] = $this->compileWhere($pdo, true, false);
@@ -1247,11 +1234,14 @@ class Query
     public function restore(): int
     {
         $this->assertWritable();
-        if (!$this->softDelete['enabled'] || !$this->hasColumn($this->softDelete['column'])) {
-            return 0;
+        if (!$this->softDelete['enabled']) {
+            throw new \RuntimeException('Soft delete is not enabled');
         }
-        $this->onlyTrashed(); // Ensure onlyTrashed is applied
         $col = $this->softDelete['column'];
+        if (!$this->hasColumn($col)) {
+            throw new \RuntimeException("Soft delete column '$col' does not exist in table '$this->table'");
+        }
+        $this->onlyTrashed();
         $val = $this->softDelete['mode'] === 'timestamp' ? null : 0;
         $pdo = $this->db->choosePdo('update');
         [$whereSql, $whereParams] = $this->compileWhere($pdo, true, false);
