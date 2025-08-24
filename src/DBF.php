@@ -51,7 +51,7 @@ final class DBF
     /** @var array<int, callable> Middlewares: function(array $ctx, callable $next): mixed */
     private array $middlewares = [];
 
-    /** Cache table columns per connection */
+    /** @var array Cache table columns per connection */
     private array $schemaCache = [];
 
     /** @var array<string,mixed> Default scope applied to WHERE */
@@ -245,6 +245,11 @@ final class DBF
     public function getSoftDeleteConfig(): array
     {
         return $this->softDelete;
+    }
+
+    public function getScope(): array
+    {
+        return $this->scope;
     }
 
     public function execPreparedOn(PDO $pdo, string $sql, array $params, int $timeoutMs = 0): PDOStatement
@@ -482,7 +487,7 @@ class Query
         $this->db = $db;
         $this->table = $table;
         $this->softDelete = $db->getSoftDeleteConfig();
-        $this->scope = $db->scope;
+        $this->scope = $db->getScope();
     }
 
     public function select(array $cols): self
