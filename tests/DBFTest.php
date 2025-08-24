@@ -9,7 +9,6 @@ final class DBFTest extends TestCase
 
     protected function setUp(): void
     {
-        // Enable soft delete on 'deleted_at' (timestamp mode)
         $this->db = new DBF([
             'type' => 'sqlite',
             'database' => ':memory:',
@@ -20,8 +19,7 @@ final class DBFTest extends TestCase
             ]
         ]);
 
-        // Minimal schema
-        $this->db->raw("CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT UNIQUE, status TEXT, deleted_at TEXT NULL)");
+        $this->db->raw("CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT UNIQUE, status TEXT, deleted_at TEXT NULL, data TEXT)"); // Added data for JSON
         $this->db->raw("CREATE TABLE orders (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, total INTEGER, created_at TEXT)");
         $this->db->raw("CREATE TABLE order_items (id INTEGER PRIMARY KEY AUTOINCREMENT, order_id INTEGER, sku TEXT, qty INTEGER)");
     }
@@ -37,17 +35,14 @@ final class DBFTest extends TestCase
         $aff = $this->db->table('users')->where('id','=',$id)->update(['status'=>'vip']);
         $this->assertSame(1, $aff);
 
-        $deleted = $this->db->table('users')->where('id','=',$id)->delete(); // soft delete
+        $deleted = $this->db->table('users')->where('id','=',$id)->delete();
         $this->assertSame(1, $deleted);
 
-        // Default SELECT filters soft deleted rows
         $this->assertNull($this->db->table('users')->where('id','=',$id)->first());
 
-        // withTrashed shows it
         $trashed = $this->db->table('users')->withTrashed()->where('id','=',$id)->first();
         $this->assertNotNull($trashed);
 
-        // restore
         $restored = $this->db->table('users')->where('id','=',$id)->restore();
         $this->assertSame(1, $restored);
 
@@ -85,7 +80,6 @@ final class DBFTest extends TestCase
             updateColumns: ['status']
         );
 
-        // Re-run with different status => should update
         $this->db->table('users')->upsert(
             ['email'=>'a@x.com','status'=>'vip'],
             conflict: ['email'],
@@ -102,11 +96,9 @@ final class DBFTest extends TestCase
 
         $this->db->tx(function(DBF $tx){
             $tx->table('users')->insert(['email'=>'tx@x.com','status'=>'active']);
-            // force error
             throw new RuntimeException('boom');
         });
 
-        // rollback should remove the user
         $exists = $this->db->table('users')->where('email','=','tx@x.com')->exists();
         $this->assertFalse($exists);
     }
@@ -191,5 +183,36 @@ final class DBFTest extends TestCase
         $this->assertCount(50, $p1['data']);
         $p2 = $this->db->table('orders')->orderBy('id','desc')->limit(50)->getKeyset($p1['next'],'id');
         $this->assertCount(50, $p2['data']);
+    }
+
+    // New tests for v0.4.0
+    public function testForUpdateSkipLocked(): void
+    {
+        $this->db->setTestMode(true);
+        $this->db->table('users')->forUpdate()->skipLocked()->where('id','=',1)->first();
+        $this->assertStringContainsString('FOR UPDATE SKIP LOCKED', $this->db->queryString());
+    }
+
+    public function testChunk(): void
+    {
+        for ($i=0; $i<100; $i++) $this->db->table('users')->insert(['email'=>"c$i@x.com",'status'=>'active']);
+        $chunks = [];
+        $this->db->table('users')->chunk(20, function($batch) use (&$chunks) { $chunks[] = count($batch); });
+        $this->assertEquals([20,20,20,20,20], $chunks);
+    }
+
+    public function testStream(): void
+    {
+        $this->db->table('users')->insertMany([['email'=>'s1@x.com'],['email'=>'s2@x.com']]);
+        $count = 0;
+        foreach ($this->db->table('users')->stream() as $row) $count++;
+        $this->assertSame(2, $count);
+    }
+
+    public function testWhereJson(): void
+    {
+        $this->db->table('users')->insert(['email'=>'j@x.com','data'=>'{"key":{"sub":42}}']);
+        $row = $this->db->table('users')->whereJson('data->key.sub', '=', 42)->first();
+        $this->assertNotNull($row);
     }
 }
