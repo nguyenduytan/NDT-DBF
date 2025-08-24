@@ -7,6 +7,8 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    # 7.4 chỉ kiểm tra nhẹ, không fail build nếu có vấn đề (vì code yêu cầu >=8.1)
+    continue-on-error: ${{ matrix.php == '7.4' }}
     strategy:
       fail-fast: false
       matrix:
@@ -16,38 +18,65 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup PHP
+      - name: Setup PHP ${{ matrix.php }}
         uses: shivammathur/setup-php@v2
         with:
           php-version: ${{ matrix.php }}
-          extensions: pdo, sqlite3, pdo_sqlite, mbstring
           tools: composer:v2
           coverage: none
+          extensions: pdo, sqlite3, pdo_sqlite, mbstring
           ini-values: error_reporting=E_ALL, zend.exception_ignore_args=0
 
       - name: PHP info
         run: |
           php -v
-          php -m
+          php -m | grep -E 'pdo|sqlite' || true
 
-      - name: Validate composer.json
+      - name: Validate composer.json (all PHP versions)
         run: composer validate --no-interaction
 
+      # SKIP install & tests on PHP 7.4 (DBF requires PHP >= 8.1)
+      - name: Skip tests on PHP 7.4 (unsupported runtime)
+        if: matrix.php == '7.4'
+        run: |
+          echo "NDT-DBF requires PHP >= 8.1. Skipping Composer install & PHPUnit on PHP 7.4."
+          echo "This job is informational only and marked continue-on-error."
+
+      # Install deps only for PHP >= 8.1
+      - name: Get Composer cache dir
+        if: matrix.php != '7.4'
+        id: composercache
+        run: echo "dir=$(composer config cache-files-dir)" >> $GITHUB_OUTPUT
+
+      - name: Cache Composer
+        if: matrix.php != '7.4'
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.composercache.outputs.dir }}
+          key: ${{ runner.os }}-composer-${{ matrix.php }}-${{ hashFiles('**/composer.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-composer-${{ matrix.php }}-
+            ${{ runner.os }}-composer-
+
       - name: Install dependencies
-        run: composer install --no-interaction --prefer-dist --no-progress
+        if: matrix.php != '7.4'
+        env:
+          COMPOSER_PROCESS_TIMEOUT: 0
+          COMPOSER_NO_INTERACTION: 1
+          COMPOSER_NO_AUDIT: 1
+        run: |
+          if [ -f composer.lock ]; then
+            composer install --no-interaction --prefer-dist --no-progress
+          else
+            echo "No composer.lock found -> running composer update"
+            composer update --no-interaction --prefer-dist --no-progress
+          fi
 
       - name: Dump autoload (optimize)
+        if: matrix.php != '7.4'
         run: composer dump-autoload -o
 
-      - name: Run PHPUnit (auto-detect 10/11)
-        shell: bash
+      - name: Run PHPUnit
+        if: matrix.php != '7.4'
         run: |
-          set -e
-          VER="$(vendor/bin/phpunit --version | awk '{print $2}')"
-          MAJOR="${VER%%.*}"
-          echo "Detected PHPUnit $VER (major=$MAJOR)"
-          if [ "$MAJOR" -ge 11 ]; then
-            vendor/bin/phpunit --display-deprecations --colors=always
-          else
-            vendor/bin/phpunit --display-deprecations --colors=always --verbose
-          fi
+          vendor/bin/phpunit --display-deprecations --colors=always -v
