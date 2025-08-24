@@ -232,8 +232,8 @@ class DBF
     public function setMetrics(callable $cb): void { $this->metrics = $cb; }
     public function setReadonly(bool $on): void { $this->readonly = $on; }
     public function using(?string $route): self { $clone = clone $this; $clone->route = $route; return $clone; }
-    public function policy(callable $cb): void { $this->policies[] = $cb; }
-    public function use(callable $mw): void { $this->middlewares[] = $mw; }
+    public function policy(callable $cb): self { $this->policies[] = $cb; return $this; }
+    public function use(callable $mw): self { $this->middlewares[] = $mw; return $this; }
 
     /** Return clone with added global scope (immutable) */
     public function withScope(array $scope): self
@@ -471,6 +471,18 @@ class DBF
 
 class Builder
 {
+    private function quotePath(string $path): string
+    {
+        $parts = explode('.', $path);
+        $parts = array_map(fn($x) => $this->db->quoteIdent($x), $parts);
+        return implode('.', $parts);
+    }
+    private function tableIdent(string $table): string
+    {
+        $p = $this->db->getPrefix();
+        return $this->db->quoteIdent(($p ? $p : '') . $table);
+    }
+
     private DBF $db;
     private string $table;
 
@@ -532,7 +544,9 @@ class Builder
     public function whereIn(string $col, array $vals): self
     {
         $max = $this->db->getFeatures()['max_in_params'] ?? 1000;
-        if (count($vals) > $max) $vals = array_slice($vals, 0, $max);
+        if (count($vals) > $max) {
+            throw new \LengthException('Too many parameters for IN list');
+        }
         $place = implode(',', array_fill(0, count($vals), '?'));
         $this->wheres[] = ['AND', $this->db->quoteIdent($col) . " IN ({$place})", array_values($vals)];
         return $this;
@@ -615,22 +629,22 @@ class Builder
     public function sum(string $col)
     {
         $row = $this->select(["SUM(".$this->db->quoteIdent($col).") AS s"])->first();
-        return $row['s'] ?? 0;
+        return (int)($row['s'] ?? 0);
     }
     public function avg(string $col)
     {
         $row = $this->select(["AVG(".$this->db->quoteIdent($col).") AS a"])->first();
-        return $row['a'] ?? 0;
+        return (float)($row['a'] ?? 0);
     }
     public function min(string $col)
     {
         $row = $this->select(["MIN(".$this->db->quoteIdent($col).") AS m"])->first();
-        return $row['m'] ?? 0;
+        return (int)($row['m'] ?? 0);
     }
     public function max(string $col)
     {
         $row = $this->select(["MAX(".$this->db->quoteIdent($col).") AS m"])->first();
-        return $row['m'] ?? 0;
+        return (int)($row['m'] ?? 0);
     }
 
     public function pluck(string $col, ?string $key = null): array
@@ -790,7 +804,7 @@ class Builder
 
         // Joins
         foreach ($this->joins as $j) {
-            $sql .= ' ' . $j['type'] . ' JOIN ' . $this->db->quoteIdent($j['table']) . ' ON ' . $j['on'];
+            $sql .= ' ' . $j['type'] . ' JOIN ' . $this->tableIdent($j['table']) . ' ON ' . $j['on'];
         }
 
         // WHERE
@@ -814,21 +828,25 @@ class Builder
 
     private function compileWhere(): array
     {
-        $parts = [];
-        $params= [];
+        $andTerms = [];
+        $params = [];
 
         // Global immutable scopes
         foreach ($this->db->getScopes() as $k=>$v) {
-            $parts[] = $this->db->quoteIdent($k) . ' = ?';
+            $andTerms[] = $this->db->quoteIdent($k) . ' = ?';
             $params[] = $v;
         }
 
-        // Builder wheres
+        // Builder wheres with OR/AND
+        $builder = '';
         $first = true;
         foreach ($this->wheres as [$bool, $sql, $p]) {
-            if ($first) { $parts[] = $sql; $first=false; }
-            else        { $parts[] = $bool . ' ' . $sql; }
+            if ($first) { $builder .= $sql; $first=false; }
+            else        { $builder .= ' ' . $bool . ' ' . $sql; }
             $params = array_merge($params, $p);
+        }
+        if ($builder !== '') {
+            $andTerms[] = '(' . $builder . ')';
         }
 
         // Soft delete guard (only if column exists)
@@ -837,15 +855,15 @@ class Builder
             $col = $feat['column'] ?? 'deleted_at';
             if ($this->db->hasColumn($this->table, $col)) {
                 if ($this->onlyTrashed) {
-                    $parts[] = $this->db->quoteIdent($col) . ' IS NOT NULL';
+                    $andTerms[] = $this->db->quoteIdent($col) . ' IS NOT NULL';
                 } elseif (!$this->withTrashed) {
-                    $parts[] = $this->db->quoteIdent($col) . ' IS NULL';
+                    $andTerms[] = $this->db->quoteIdent($col) . ' IS NULL';
                 }
             }
         }
 
-        if (empty($parts)) return ['', []];
-        $sql = ' WHERE ' . implode(' AND ', $parts);
+        if (empty($andTerms)) return ['', []];
+        $sql = ' WHERE ' . implode(' AND ', $andTerms);
         return [$sql, $params];
     }
 
