@@ -745,7 +745,7 @@ class Query
 
         // Apply onlyTrashed for restore operations
         if ($this->onlyTrashed && $this->softDelete['enabled'] && $this->hasColumn($sdCol)) {
-            $sdColQuoted = $driver === 'sqlite' ? $sdCol : $this->db->qi($sdCol, $pdo);
+            $sdColQuoted = $this->db->qi($sdCol, $pdo); // Always quote column
             $conditions[] = $sdColQuoted . ($this->softDelete['mode'] === 'timestamp' ? ' IS NOT NULL' : ' = ' . $this->softDelete['deleted_value']);
         }
 
@@ -759,7 +759,7 @@ class Query
 
         // Apply soft delete for select queries (unless withTrashed or onlyTrashed)
         if ($forSelect && $this->softDelete['enabled'] && $this->hasColumn($sdCol) && !$this->withTrashed && !$this->onlyTrashed) {
-            $sdColQuoted = $driver === 'sqlite' ? $sdCol : $this->db->qi($sdCol, $pdo);
+            $sdColQuoted = $this->db->qi($sdCol, $pdo); // Always quote column
             $conditions[] = $sdColQuoted . ($this->softDelete['mode'] === 'timestamp' ? ' IS NULL' : ' = 0');
         }
 
