@@ -348,29 +348,29 @@ final class DBF
         try {
             switch ($driver) {
                 case 'sqlite':
-                    $stmt = @$pdo->query("PRAGMA table_info('$fullTable')"); // Suppress warning
+                    $stmt = $pdo->query("PRAGMA table_info('$fullTable')");
                     $cols = $stmt ? array_column($stmt->fetchAll(), 'name') : [];
                     break;
                 case 'mysql':
-                    $stmt = @$pdo->query("SHOW COLUMNS FROM `$fullTable`"); // Suppress warning
+                    $stmt = $pdo->query("SHOW COLUMNS FROM `$fullTable`");
                     $cols = $stmt ? array_column($stmt->fetchAll(), 'Field') : [];
                     break;
                 case 'pgsql':
-                    $stmt = @$pdo->prepare("SELECT column_name FROM information_schema.columns WHERE table_name = ?"); // Suppress warning
+                    $stmt = $pdo->prepare("SELECT column_name FROM information_schema.columns WHERE table_name = ?");
                     if ($stmt) {
                         $stmt->execute([$fullTable]);
                         $cols = array_column($stmt->fetchAll(), 'column_name');
                     }
                     break;
                 case 'sqlsrv':
-                    $stmt = @$pdo->prepare("SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = ?"); // Suppress warning
+                    $stmt = $pdo->prepare("SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = ?");
                     if ($stmt) {
                         $stmt->execute([$fullTable]);
                         $cols = array_column($stmt->fetchAll(), 'COLUMN_NAME');
                     }
                     break;
                 case 'oracle':
-                    $stmt = @$pdo->prepare("SELECT COLUMN_NAME FROM ALL_TAB_COLUMNS WHERE TABLE_NAME = UPPER(?)"); // Suppress warning
+                    $stmt = $pdo->prepare("SELECT COLUMN_NAME FROM ALL_TAB_COLUMNS WHERE TABLE_NAME = UPPER(?)");
                     if ($stmt) {
                         $stmt->execute([$fullTable]);
                         $cols = array_column($stmt->fetchAll(), 'COLUMN_NAME');
@@ -378,7 +378,7 @@ final class DBF
                     break;
             }
         } catch (Throwable $e) {
-            // Silent catch to avoid warnings
+            throw new \RuntimeException("Failed to get columns for table '$fullTable': " . $e->getMessage());
         }
         $this->schemaCache[$key] = $cols;
         return $cols;
@@ -700,8 +700,9 @@ class Query
 
     private function compileSelect(PDO $pdo): array
     {
-        $select = 'SELECT ' . implode(', ', array_map(fn($c) => is_string($c) ? $this->db->qi($c, $pdo) : $c, $this->select));
-        $from = 'FROM ' . $this->compileTable($pdo);
+        $selectCols = array_map(fn($c) => is_string($c) && $c === '*' ? '*' : $this->db->qi($c, $pdo), $this->select);
+        $select = 'SELECT ' . implode(', ', $selectCols);
+        $from = ' FROM ' . $this->compileTable($pdo);
         $join = '';
         foreach ($this->joins as $j) {
             $join .= ' ' . $j['type'] . ' JOIN ' . $this->db->qi($j['table'], $pdo) . ' ON ' . $this->db->qi($j['left'], $pdo) . ' ' . $j['op'] . ' ' . $this->db->qi($j['right'], $pdo);
@@ -1200,10 +1201,10 @@ class Query
     private function softDelete(): int
     {
         $this->assertWritable();
+        $col = $this->softDelete['column'];
         if (!$this->softDelete['enabled']) {
             throw new \RuntimeException('Soft delete is not enabled');
         }
-        $col = $this->softDelete['column'];
         if (!$this->hasColumn($col)) {
             throw new \RuntimeException("Soft delete column '$col' does not exist in table '$this->table'");
         }
@@ -1223,10 +1224,10 @@ class Query
             $stmt = $this->dbExec($pdo, $sql, $params, $this->timeoutMs);
             $ms = (microtime(true) - $start) * 1000;
             $count = $stmt->rowCount();
-            $this->dbEmit($ctx, $ms, $count);
             if ($this->db->getLogger()) {
                 call_user_func($this->db->getLogger(), $sql, $params, $ms);
             }
+            $this->dbEmit($ctx, $ms, $count);
             return $count;
         });
         return $runner($ctx);
@@ -1235,19 +1236,15 @@ class Query
     public function restore(): int
     {
         $this->assertWritable();
-        if (!$this->softDelete['enabled']) {
-            throw new \RuntimeException('Soft delete is not enabled');
+        if (!$this->softDelete['enabled'] || !$this->hasColumn($this->softDelete['column'])) {
+            throw new \RuntimeException('Soft delete is not enabled or column does not exist');
         }
-        $col = $this->softDelete['column'];
-        if (!$this->hasColumn($col)) {
-            throw new \RuntimeException("Soft delete column '$col' does not exist in table '$this->table'");
-        }
-        $this->onlyTrashed();
-        $val = $this->softDelete['mode'] === 'timestamp' ? null : 0;
         $pdo = $this->db->choosePdo('update');
+        $this->onlyTrashed();
         [$whereSql, $whereParams] = $this->compileWhere($pdo, true, false);
         $where = $whereSql ? ' WHERE ' . $whereSql : '';
-        $sql = 'UPDATE ' . $this->compileTable($pdo) . ' SET ' . $this->db->qi($col, $pdo) . ' = ?' . $where;
+        $sql = 'UPDATE ' . $this->compileTable($pdo) . ' SET ' . $this->db->qi($this->softDelete['column'], $pdo) . ' = ?' . $where;
+        $val = $this->softDelete['mode'] === 'timestamp' ? null : 0;
         $params = [$val, ...$whereParams];
         $ctx = ['type' => 'update', 'table' => $this->table];
         $runner = $this->dbRunner(function($ctx) use ($pdo, $sql, $params) {
@@ -1271,8 +1268,24 @@ class Query
     public function forceDelete(): int
     {
         $this->assertWritable();
-        $this->withTrashed = true;
-        return $this->delete();
+        $pdo = $this->db->choosePdo('delete');
+        [$whereSql, $params] = $this->compileWhere($pdo, true, false);
+        $where = $whereSql ? ' WHERE ' . $whereSql : '';
+        $sql = 'DELETE FROM ' . $this->compileTable($pdo) . $where;
+        $ctx = ['type' => 'delete', 'table' => $this->table];
+        $runner = $this->dbRunner(function($ctx) use ($pdo, $sql, $params) {
+            if ($this->db->isTestMode()) {
+                $this->db->storeLast($sql, $params);
+                return 0;
+            }
+            $start = microtime(true);
+            $stmt = $this->dbExec($pdo, $sql, $params, $this->timeoutMs);
+            $ms = (microtime(true) - $start) * 1000;
+            $count = $stmt->rowCount();
+            $this->dbEmit($ctx, $ms, $count);
+            return $count;
+        });
+        return $runner($ctx);
     }
 
     public function upsert(array $data, array $conflict, array $updateColumns): int
