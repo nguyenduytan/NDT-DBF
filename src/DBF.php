@@ -2,7 +2,7 @@
 /**
  * NDT DBF - Simple, Lightweight PHP Database Framework (Enterprise+)
  *
- * @version   0.4.0
+ * @version   0.4.1
  * @package   NDT DBF
  * @description Single-file, secure PHP Database Framework with PRO & Advanced++ features.
  * @author    Tony Nguyen
@@ -21,6 +21,7 @@
  * - Advanced++: Readonly/Maintenance mode; Soft Delete guard (withTrashed/onlyTrashed/restore/forceDelete)
  * - Advanced++: Per-query timeout (MySQL/PG best-effort)
  * - NEW (v0.4.0): Row locking (forUpdate/skipLocked), chunk/stream for large datasets, JSON helpers (whereJson/jsonSet), cast DSL, Oracle support
+ * - NEW (v0.4.1): Added JSON support for SQLite, fixed logger access, fixed avg return type
  *
  * Quickstart:
  *   require 'DBF.php';
@@ -252,6 +253,11 @@ final class DBF
         return $this->scope;
     }
 
+    public function getLogger(): ?callable
+    {
+        return $this->logger;
+    }
+
     public function execPreparedOn(PDO $pdo, string $sql, array $params, int $timeoutMs = 0): PDOStatement
     {
         if ($timeoutMs > 0) {
@@ -319,7 +325,7 @@ final class DBF
         }
         $this->schemaCache[$key] = $cols;
         return $cols;
-    }
+    }}
 
     public function tx(callable $fn, int $attempts = 3): mixed
     {
@@ -434,7 +440,7 @@ final class DBF
             $start = microtime(true);
             $stmt = $this->execPreparedOn($pdo, $sql, $params);
             $ms = (microtime(true) - $start) * 1000;
-            if ($this->logger) call_user_func($this->logger, $sql, $params, $ms);
+            if ($this->getLogger()) call_user_func($this->getLogger(), $sql, $params, $ms);
             $res = $stmt->fetchAll();
             $this->emitMetrics($ctx, $ms, count($res));
             return $res;
@@ -458,7 +464,7 @@ final class DBF
     {
         $this->lastQueryString = $sql;
         $this->lastQueryParams = $params;
-        if ($this->logger) call_user_func($this->logger, $sql, $params, 0.0);
+        if ($this->getLogger()) call_user_func($this->getLogger(), $sql, $params, 0.0);
     }
 }
 
@@ -734,6 +740,9 @@ class Query
                     } elseif ($driver === 'pgsql') {
                         $path = implode('->>', $jsonPath);
                         $parts[] = $prefix . $this->db->qi($col, $pdo) . "->>'{$path}' " . $w['op'] . " ?";
+                    } elseif ($driver === 'sqlite') {
+                        $path = implode('.', $jsonPath);
+                        $parts[] = $prefix . "json_extract(" . $this->db->qi($col, $pdo) . ", '$.{$path}') " . $w['op'] . " ?";
                     } else {
                         throw new \RuntimeException('whereJson not supported on ' . $driver);
                     }
@@ -792,7 +801,7 @@ class Query
             $start = microtime(true);
             $stmt = $this->dbExec($pdo, $sql, $params, $this->timeoutMs);
             $ms = (microtime(true) - $start) * 1000;
-            if ($this->db->logger) call_user_func($this->db->logger, $sql, $params, $ms);
+            if ($this->db->getLogger()) call_user_func($this->db->getLogger(), $sql, $params, $ms);
             $res = $stmt->fetchAll();
             $this->dbEmit($ctx, $ms, count($res));
             return $res;
@@ -872,7 +881,7 @@ class Query
         return $runner($ctx);
     }
 
-    public function avg(string $col): float
+    public function avg(string $col): mixed
     {
         $pdo = $this->db->choosePdo('aggregate');
         [$whereSql, $params] = $this->compileWhere($pdo, true, true);
@@ -882,14 +891,15 @@ class Query
         $runner = $this->dbRunner(function($ctx) use ($pdo, $sql, $params) {
             if ($this->db->isTestMode()) {
                 $this->db->storeLast($sql, $params);
-                return 0.0;
+                return 0;
             }
             $start = microtime(true);
             $stmt = $this->dbExec($pdo, $sql, $params, $this->timeoutMs);
             $ms = (microtime(true) - $start) * 1000;
             $res = $stmt->fetchColumn();
             $this->dbEmit($ctx, $ms, 1);
-            return $res === null ? 0.0 : (float)$res;
+            $result = $res === null ? 0 : $res;
+            return is_float($result) && floor($result) === $result ? (int)$result : (float)$result;
         });
         return $runner($ctx);
     }
@@ -1267,6 +1277,9 @@ class Query
             } elseif ($driver === 'pgsql') {
                 $updatesSql[] = $this->db->qi($col, $pdo) . ' = JSONB_SET(' . $this->db->qi($col, $pdo) . ', \'{' . str_replace('.', ',', $path) . '}\', ?)';
                 $params[] = json_encode($val);
+            } elseif ($driver === 'sqlite') {
+                $updatesSql[] = $this->db->qi($col, $pdo) . ' = json_set(' . $this->db->qi($col, $pdo) . ', \'$.' . $path . '\', ?)';
+                $params[] = $val;
             } else {
                 throw new \RuntimeException('jsonSet not supported on ' . $driver);
             }
