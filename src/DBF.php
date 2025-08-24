@@ -899,7 +899,7 @@ class Query
             $res = $stmt->fetchColumn();
             $this->dbEmit($ctx, $ms, 1);
             $result = $res === null ? 0 : $res;
-            return is_float($result) && floor($result) === $result ? (int)$result : (float)$result;
+            return is_float($result) && floor($result) == $result ? (int)$result : (float)$result;
         });
         return $runner($ctx);
     }
