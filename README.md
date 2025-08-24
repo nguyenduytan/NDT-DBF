@@ -1,4 +1,4 @@
-<h1 align="center">NDT DBF</h1>
+<h1 align="center"><b>NDT DBF</b></h1>
 
 <p align="center"><strong>NDT DBF</strong> — A single‑file PHP Database Framework (PRO · Enterprise+).<br>
 Secure by default, compact API, works as <em>one file</em> or via <strong>Composer/PSR‑4</strong>.</p>
@@ -10,15 +10,28 @@ Secure by default, compact API, works as <em>one file</em> or via <strong>Compos
 </p>
 
 <p align="center">
+  <!-- Build -->
   <a href="https://github.com/nguyenduytan/NDT-DBF/actions">
-    <img alt="CI" src="https://github.com/nguyenduytan/NDT-DBF/actions/workflows/ci.yml/badge.svg">
+    <img alt="build" src="https://img.shields.io/github/actions/workflow/status/nguyenduytan/NDT-DBF/ci.yml?label=build">
   </a>
+  <!-- Downloads -->
   <a href="https://packagist.org/packages/ndtan/dbf">
-    <img alt="Packagist" src="https://img.shields.io/packagist/v/ndtan/dbf.svg">
+    <img alt="downloads" src="https://img.shields.io/packagist/dm/ndtan/dbf.svg?label=downloads">
   </a>
-  <img alt="PHP" src="https://img.shields.io/badge/php-%3E%3D%208.1-777bb3">
-  <img alt="License" src="https://img.shields.io/badge/license-MIT-green.svg">
+  <!-- Stable version -->
+  <a href="https://packagist.org/packages/ndtan/dbf">
+    <img alt="stable" src="https://img.shields.io/packagist/v/ndtan/dbf.svg?label=stable">
+  </a>
+  <!-- License -->
+  <a href="LICENSE">
+    <img alt="license" src="https://img.shields.io/badge/license-MIT-green.svg">
+  </a>
+  <!-- Sponsors (dynamic from GitHub Sponsors) -->
+  <a href="https://github.com/sponsors/nguyenduytan">
+    <img alt="sponsors" src="https://img.shields.io/github/sponsors/nguyenduytan?label=sponsors">
+  </a>
 </p>
+
 
 ---
 
@@ -219,7 +232,7 @@ $db->table('users')->count();            // COUNT(*)
 
 ```php
 $db->table('users')->where('status','=','active')->get();
-$db->table('users')->where('id','>',100)->orWhere('email','=','a@x.com')->get();
+$db->table('users')->where('id','>',100)->orWhere('email','=','a@ndtan.net')->get();
 $db->table('users')->whereBetween('created_at',['2025-01-01','2025-12-31'])->get();
 $db->table('users')->whereIn('id',[1,2,3])->get();   // guarded IN list
 $db->table('users')->whereNull('deleted_at')->get();
@@ -242,7 +255,7 @@ $db->table('orders')
 
 ```php
 // Insert
-$id = $db->table('users')->insert(['email'=>'a@x.com','status'=>'active']);
+$id = $db->table('users')->insert(['email'=>'a@ndtan.net','status'=>'active']);
 
 // Insert many
 $db->table('order_items')->insertMany([
@@ -251,7 +264,7 @@ $db->table('order_items')->insertMany([
 ]);
 
 // Insert + RETURNING (PG/SQLite) or re-fetch by id (MySQL/SQLSrv)
-$row = $db->table('users')->insertGet(['email'=>'b@x.com','status'=>'vip'], ['id','email']);
+$row = $db->table('users')->insertGet(['email'=>'b@ndtan.net','status'=>'vip'], ['id','email']);
 
 // Update
 $aff = $db->table('users')->where('id','=', $id)->update(['status'=>'vip']);
@@ -265,7 +278,7 @@ $aff = $db->table('users')->where('id','=', $id)->delete();
 ```php
 // MySQL: ON DUPLICATE KEY; PG/SQLite: ON CONFLICT; others: safe fallback (tx)
 $db->table('users')->upsert(
-  ['email'=>'a@x.com','status'=>'vip'],
+  ['email'=>'a@ndtan.net','status'=>'vip'],
   conflict: ['email'],
   updateColumns: ['status']
 );
@@ -367,10 +380,10 @@ print_r($db->queryParams());
 
 ```php
 // Positional
-$rows = $db->raw('SELECT * FROM users WHERE email LIKE ?', ['%x.com']);
+$rows = $db->raw('SELECT * FROM users WHERE email LIKE ?', ['%ndtan.net']);
 
 // Named
-$rows = $db->raw('SELECT * FROM users WHERE email = :e', ['e'=>'a@x.com']);
+$rows = $db->raw('SELECT * FROM users WHERE email = :e', ['e'=>'a@ndtan.net']);
 
 // DML
 $aff  = $db->raw('UPDATE users SET status=? WHERE id=?', ['vip', 10]);
