@@ -29,6 +29,7 @@ final class DBF
     private ?string $driverRead = null;
     private string $prefix = '';
     private bool $readonly = false;
+    private bool $testMode = false; // Added to fix TypeError
 
     /** @var callable|null function(string $sql, array $params, float $ms): void */
     private $logger = null;
