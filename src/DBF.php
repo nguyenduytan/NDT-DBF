@@ -134,8 +134,12 @@ final class DBF
                 return [$pdo, 'pgsql'];
             case 'sqlite':
                 $pdo = new PDO("sqlite:{$db}", null, null, $attrs);
-                @$pdo->exec('PRAGMA foreign_keys = ON'); // Suppress warning
-                @$pdo->exec('PRAGMA journal_mode = WAL'); // Suppress warning
+                try {
+                    @$pdo->exec('PRAGMA foreign_keys = ON'); // Suppress warning
+                    @$pdo->exec('PRAGMA journal_mode = WAL'); // Suppress warning
+                } catch (Throwable $e) {
+                    throw new \RuntimeException("SQLite PRAGMA failed: " . $e->getMessage());
+                }
                 return [$pdo, 'sqlite'];
             case 'sqlsrv':
                 $pdo = new PDO("sqlsrv:Server={$host},{$port};Database={$db}", $user, $pass, $attrs);
@@ -747,7 +751,7 @@ class Query
 
         // Apply onlyTrashed for restore operations
         if ($this->onlyTrashed && $this->softDelete['enabled'] && $this->hasColumn($sdCol)) {
-            $sdColQuoted = $this->db->qi($sdCol, $pdo); // Always quote column using qi()
+            $sdColQuoted = $this->db->qi($sdCol, $pdo);
             $conditions[] = $sdColQuoted . ($this->softDelete['mode'] === 'timestamp' ? ' IS NOT NULL' : ' = ' . $this->softDelete['deleted_value']);
         }
 
@@ -761,7 +765,7 @@ class Query
 
         // Apply soft delete for select queries (unless withTrashed or onlyTrashed)
         if ($forSelect && $this->softDelete['enabled'] && $this->hasColumn($sdCol) && !$this->withTrashed && !$this->onlyTrashed) {
-            $sdColQuoted = $this->db->qi($sdCol, $pdo); // Always quote column using qi()
+            $sdColQuoted = $this->db->qi($sdCol, $pdo);
             $conditions[] = $sdColQuoted . ($this->softDelete['mode'] === 'timestamp' ? ' IS NULL' : ' = 0');
         }
 
@@ -814,7 +818,8 @@ class Query
             }
         }
 
-        $sql = implode('', $conditions) ?: '';
+        // Join conditions with AND if multiple conditions exist
+        $sql = empty($conditions) ? '' : implode(' AND ', $conditions);
         return [$sql, $bind];
     }
 
