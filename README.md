@@ -1,18 +1,17 @@
-# NDT DBF
+<h1 align="center">NDT DBF</h1>
 
-**NDT DBF** — A single‑file PHP Database Framework (PRO · Enterprise+).  
-Secure by default, compact API, works as **one file** or via **Composer/PSR‑4**.
+<p align="center"><strong>NDT DBF</strong> — A single‑file PHP Database Framework (PRO · Enterprise+).<br>
+Secure by default, compact API, works as <em>one file</em> or via <strong>Composer/PSR‑4</strong>.</p>
 
-[Website & Docs](https://ndtan.net) · [Download single file](./src/DBF.php) · [Donate](https://www.paypal.com/paypalme/copbeo)
-
----
+<p align="center">
+  <a href="https://ndtan.net">Website & Docs</a> ·
+  <a href="https://github.com/nguyenduytan/NDT-DBF/blob/main/src/DBF.php">Download single file</a> ·
+  <a href="https://www.paypal.com/paypalme/copbeo">Donate</a>
+</p>
 
 <p align="center">
   <a href="https://github.com/nguyenduytan/NDT-DBF/actions">
     <img alt="CI" src="https://github.com/nguyenduytan/NDT-DBF/actions/workflows/ci.yml/badge.svg">
-  </a>
-  <a href="https://packagist.org/packages/ndtan/dbf">
-    <img alt="Packagist" src="https://img.shields.io/packagist/v/ndtan/dbf.svg">
   </a>
   <img alt="PHP" src="https://img.shields.io/badge/php-%3E%3D%208.1-777bb3">
   <img alt="License" src="https://img.shields.io/badge/license-MIT-green.svg">
@@ -29,7 +28,7 @@ Secure by default, compact API, works as **one file** or via **Composer/PSR‑4*
   - [Single file](#single-file)
 - [Connection Setup](#connection-setup)
   - [URI/DSN (one line)](#uridsn-one-line)
-  - [Array config (Medoo‑like)](#array-config-medoo-like)
+  - [Array config (Medoo-like)](#array-config-medoo-like)
   - [Existing PDO](#existing-pdo)
   - [Master/Replica](#masterreplica)
 - [Quick Start](#quick-start)
@@ -46,7 +45,7 @@ Secure by default, compact API, works as **one file** or via **Composer/PSR‑4*
   - [Readonly/Maintenance mode](#readonlymaintenance-mode)
   - [Soft Delete guard](#soft-delete-guard)
   - [Middleware / Policy / Metrics](#middleware--policy--metrics)
-  - [Per‑query timeout](#per-query-timeout)
+  - [Per-query timeout](#per-query-timeout)
   - [Test Mode](#test-mode)
 - [Raw SQL](#raw-sql)
 - [Security](#security)
@@ -61,16 +60,16 @@ Secure by default, compact API, works as **one file** or via **Composer/PSR‑4*
 
 ## Features
 
-- ⚡️ **Lightweight & single file**: no third‑party deps (PDO only)
-- 🔐 **Secure by default**: prepared statements, per‑driver identifier quoting, IN‑list guard
+- ⚡️ **Lightweight & single file**: no third-party deps (PDO only)
+- 🔐 **Secure by default**: prepared statements, per-driver identifier quoting, IN-list guard
 - 🧱 **Query Builder**: `select / where / orWhere / whereIn / between / null / join / group / having / order / limit / offset`
 - 🧾 **Full CRUD**: `insert`, `insertMany`, `insertGet` (PG/SQLite `RETURNING`)
-- 🔁 **Cross‑dialect Upsert**: MySQL (`ON DUP KEY`), PG/SQLite (`ON CONFLICT`), safe fallback
+- 🔁 **Cross-dialect Upsert**: MySQL (`ON DUP KEY`), PG/SQLite (`ON CONFLICT`), safe fallback
 - 💳 **Transactions**: exponential backoff + jitter on deadlock
 - 🚦 **Readonly/Maintenance mode**: block DML when system is frozen
 - 🪶 **Soft Delete**: `withTrashed() / onlyTrashed() / restore() / forceDelete()`
-- 🧭 **Master/Replica routing**: auto/manual read‑write split
-- ⏱️ **Per‑query timeout** (best‑effort for MySQL/PG)
+- 🧭 **Master/Replica routing**: auto/manual read-write split
+- ⏱️ **Per-query timeout** (best-effort for MySQL/PG)
 - 🧩 **Middleware & Policy hooks** + **Logger** & **Metrics hook**
 - 📊 **Aggregates & Sugar**: `sum()`, `avg()`, `min()`, `max()`, `pluck()`
 - 🧪 **Test Mode**: build SQL **without executing** (great for unit tests/previews)
@@ -136,7 +135,7 @@ $db = new \ndtan\DBF('sqlite:///path/to/app.db');  // file
 $db = new \ndtan\DBF('sqlsrv://sa:pass@localhost/app');
 ```
 
-### Array config (Medoo‑like)
+### Array config (Medoo-like)
 
 ```php
 $db = new \ndtan\DBF([
@@ -298,7 +297,7 @@ $page2 = $db->table('orders')->orderBy('id','desc')->limit(50)->getKeyset($page1
 $db->tx(function(\ndtan\DBF $tx) {
   $orderId = $tx->table('orders')->insert(['user_id'=>10,'total'=>100,'created_at'=>date('c')]);
   $tx->table('order_items')->insert(['order_id'=>$orderId,'sku'=>'A','qty'=>1]);
-}, attempts: 3); // auto‑retry on deadlock
+}, attempts: 3); // auto-retry on deadlock
 ```
 
 ### Readonly/Maintenance mode
@@ -313,8 +312,8 @@ $db->setReadonly(true);
 ```php
 // Enable via config: features.soft_delete.enabled=true
 $db->table('users')->where('id','=',123)->delete();     // set deleted_at
-$db->table('users')->withTrashed()->first();            // include soft‑deleted
-$db->table('users')->onlyTrashed()->get();              // only soft‑deleted
+$db->table('users')->withTrashed()->first();            // include soft-deleted
+$db->table('users')->onlyTrashed()->get();              // only soft-deleted
 $db->table('users')->where('id','=',123)->restore();    // restore
 $db->table('users')->where('id','=',123)->forceDelete();// hard delete
 ```
@@ -339,14 +338,14 @@ $db->policy(function(array $ctx){
 
 // Metrics hook
 $db->setMetrics(function(array $m){
-  // $m = ['type'=>'select','table'=>'users','ms'=>12.3','count'=>10, ...]
+  // $m = ['type'=>'select','table'=>'users','ms'=>12.3,'count'=>10, ...]
 });
 ```
 
-### Per‑query timeout
+### Per-query timeout
 
 ```php
-$db->table('big_table')->timeout(1500)->get(); // 1.5s best‑effort (MySQL/PG)
+$db->table('big_table')->timeout(1500)->get(); // 1.5s best-effort (MySQL/PG)
 ```
 
 ### Test Mode
@@ -380,9 +379,9 @@ $aff  = $db->raw('UPDATE users SET status=? WHERE id=?', ['vip', 10]);
 
 - **Prepared statements** for all user inputs
 - **Identifier quoting** per driver to prevent injection via table/column names
-- **IN‑list guard**: limit `whereIn` items (default 1000)
+- **IN-list guard**: limit `whereIn` items (default 1000)
 - **Readonly mode** to block unintended writes
-- **Scope/Policy** hooks for tenant/RBAC‑like checks
+- **Scope/Policy** hooks for tenant/RBAC-like checks
 
 > DBF is “secure by default”, but you should still harden your DB (users/roles, TLS, firewall, backups, monitoring).
 
@@ -402,8 +401,8 @@ $info = $db->info(); // driver, routing, readonly, soft_delete, test_mode...
 
 ## Quick Compare with Medoo
 
-- **Covers common use‑cases** (CRUD, builder, raw…)
-- **Adds Enterprise+**: readonly, soft delete, deadlock‑retry, metrics, middleware/policy, keyset, master/replica, per‑query timeout, **Test Mode**
+- **Covers common use-cases** (CRUD, builder, raw…)
+- **Adds Enterprise+**: readonly, soft delete, deadlock-retry, metrics, middleware/policy, keyset, master/replica, per-query timeout, **Test Mode**
 - **Lean file**: less legacy/sugar, more hooks for extension
 
 ---
