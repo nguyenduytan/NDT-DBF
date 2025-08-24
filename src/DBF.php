@@ -740,24 +740,27 @@ class Query
     {
         $bind = [];
         $conditions = [];
-
-        // Apply onlyTrashed first for restore operations
+        $driver = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
         $sdCol = $this->softDelete['column'];
+
+        // Apply onlyTrashed for restore operations
         if ($this->onlyTrashed && $this->softDelete['enabled'] && $this->hasColumn($sdCol)) {
-            $conditions[] = $this->db->qi($sdCol, $pdo) . ($this->softDelete['mode'] === 'timestamp' ? " IS NOT NULL" : " = " . $this->softDelete['deleted_value']);
+            $sdColQuoted = $driver === 'sqlite' ? $sdCol : $this->db->qi($sdCol, $pdo);
+            $conditions[] = $sdColQuoted . ($this->softDelete['mode'] === 'timestamp' ? ' IS NOT NULL' : ' = ' . $this->softDelete['deleted_value']);
         }
 
         // Apply scope
         if ($includeScope && $this->scope) {
             foreach ($this->scope as $k => $v) {
-                $conditions[] = $this->db->qi($k, $pdo) . " = ?";
+                $conditions[] = $this->db->qi($k, $pdo) . ' = ?';
                 $bind[] = $v;
             }
         }
 
         // Apply soft delete for select queries (unless withTrashed or onlyTrashed)
         if ($forSelect && $this->softDelete['enabled'] && $this->hasColumn($sdCol) && !$this->withTrashed && !$this->onlyTrashed) {
-            $conditions[] = $this->db->qi($sdCol, $pdo) . ($this->softDelete['mode'] === 'timestamp' ? " IS NULL" : " = 0");
+            $sdColQuoted = $driver === 'sqlite' ? $sdCol : $this->db->qi($sdCol, $pdo);
+            $conditions[] = $sdColQuoted . ($this->softDelete['mode'] === 'timestamp' ? ' IS NULL' : ' = 0');
         }
 
         // Apply user-defined wheres
@@ -770,7 +773,7 @@ class Query
                     break;
                 case 'in':
                     $vals = $w['vals'];
-                    if (count($vals) > $this->db->guardMaxIn()) throw new \LengthException("whereIn list exceeds " . $this->db->guardMaxIn() . " items");
+                    if (count($vals) > $this->db->guardMaxIn()) throw new \LengthException('whereIn list exceeds ' . $this->db->guardMaxIn() . ' items');
                     if (empty($vals)) {
                         $conditions[] = $prefix . ($w['not'] ? '1=1' : '1=0');
                         break;
@@ -790,21 +793,17 @@ class Query
                     $bind[] = $pair[1];
                     break;
                 case 'json':
-                    $driver = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
-                    if ($driver === 'sqlite') {
-                        @$pdo->exec('PRAGMA foreign_keys = ON'); // Suppress warning
-                    }
                     $jsonPath = explode('->', $w['path']);
                     $col = array_shift($jsonPath);
                     if ($driver === 'mysql') {
                         $path = implode('.', $jsonPath);
-                        $conditions[] = $prefix . "JSON_EXTRACT(" . $this->db->qi($col, $pdo) . ", '$.{$path}') " . $w['op'] . " ?";
+                        $conditions[] = $prefix . 'JSON_EXTRACT(' . $this->db->qi($col, $pdo) . ", '$.{$path}') " . $w['op'] . ' ?';
                     } elseif ($driver === 'pgsql') {
                         $path = implode('->>', $jsonPath);
-                        $conditions[] = $prefix . $this->db->qi($col, $pdo) . "->>'{$path}' " . $w['op'] . " ?";
+                        $conditions[] = $prefix . $this->db->qi($col, $pdo) . "->>'{$path}' " . $w['op'] . ' ?';
                     } elseif ($driver === 'sqlite') {
                         $path = implode('.', $jsonPath);
-                        $conditions[] = $prefix . "json_extract(" . $this->db->qi($col, $pdo) . ", '$.{$path}') " . $w['op'] . " ?";
+                        $conditions[] = $prefix . 'json_extract(' . $this->db->qi($col, $pdo) . ", '$.{$path}') " . $w['op'] . ' ?';
                     } else {
                         throw new \RuntimeException('whereJson not supported on ' . $driver);
                     }
