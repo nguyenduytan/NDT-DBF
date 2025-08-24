@@ -242,6 +242,11 @@ final class DBF
         return $this->maxInParams;
     }
 
+    public function getSoftDeleteConfig(): array
+    {
+        return $this->softDelete;
+    }
+
     public function execPreparedOn(PDO $pdo, string $sql, array $params, int $timeoutMs = 0): PDOStatement
     {
         if ($timeoutMs > 0) {
@@ -476,7 +481,7 @@ class Query
     {
         $this->db = $db;
         $this->table = $table;
-        $this->softDelete = $db->softDelete;
+        $this->softDelete = $db->getSoftDeleteConfig();
         $this->scope = $db->scope;
     }
 
