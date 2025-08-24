@@ -213,21 +213,23 @@ final class DBF
         $this->routing = $config['routing'] ?? 'auto';
     }
 
-    public function qi(string $identifier, ?PDO $pdo = null): string
+    private function qi(string $identifier, PDO $pdo): string
     {
-        $driver = $pdo ? $pdo->getAttribute(PDO::ATTR_DRIVER_NAME) : $this->driverWrite;
-        switch ($driver) {
-            case 'mysql':
-                return '`' . str_replace('.', '`.`', $identifier) . '`';
-            case 'pgsql':
-            case 'sqlite':
-                return '"' . str_replace('.', '"."', $identifier) . '"';
-            case 'sqlsrv':
-            case 'oracle':
-                return '[' . str_replace('.', '].[', $identifier) . ']';
-            default:
-                return $identifier;
+        $driver = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
+        if ($driver === 'sqlite') {
+            // SQLite uses double quotes for identifiers
+            return '"' . str_replace('"', '""', $identifier) . '"';
+        } elseif ($driver === 'mysql') {
+            // MySQL uses backticks
+            return '`' . str_replace('`', '``', $identifier) . '`';
+        } elseif ($driver === 'pgsql') {
+            // PostgreSQL uses double quotes
+            return '"' . str_replace('"', '""', $identifier) . '"';
+        } elseif ($driver === 'sqlsrv' || $driver === 'oracle') {
+            // SQL Server and Oracle use unquoted or specific handling
+            return $identifier;
         }
+        return $identifier;
     }
 
     public function getPrefix(): string
@@ -745,7 +747,7 @@ class Query
 
         // Apply onlyTrashed for restore operations
         if ($this->onlyTrashed && $this->softDelete['enabled'] && $this->hasColumn($sdCol)) {
-            $sdColQuoted = $this->db->qi($sdCol, $pdo); // Always quote column
+            $sdColQuoted = $this->db->qi($sdCol, $pdo); // Always quote column using qi()
             $conditions[] = $sdColQuoted . ($this->softDelete['mode'] === 'timestamp' ? ' IS NOT NULL' : ' = ' . $this->softDelete['deleted_value']);
         }
 
@@ -759,7 +761,7 @@ class Query
 
         // Apply soft delete for select queries (unless withTrashed or onlyTrashed)
         if ($forSelect && $this->softDelete['enabled'] && $this->hasColumn($sdCol) && !$this->withTrashed && !$this->onlyTrashed) {
-            $sdColQuoted = $this->db->qi($sdCol, $pdo); // Always quote column
+            $sdColQuoted = $this->db->qi($sdCol, $pdo); // Always quote column using qi()
             $conditions[] = $sdColQuoted . ($this->softDelete['mode'] === 'timestamp' ? ' IS NULL' : ' = 0');
         }
 
