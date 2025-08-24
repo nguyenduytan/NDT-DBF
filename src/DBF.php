@@ -325,7 +325,7 @@ final class DBF
         }
         $this->schemaCache[$key] = $cols;
         return $cols;
-    }}
+    }
 
     public function tx(callable $fn, int $attempts = 3): mixed
     {
