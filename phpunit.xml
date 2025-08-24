@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<phpunit
+  bootstrap="vendor/autoload.php"
+  colors="true"
+  backupGlobals="false"
+  cacheResult="false"
+  executionOrder="random"
+  beStrictAboutTestsThatDoNotTestAnything="false"
+>
+  <testsuites>
+    <testsuite name="DBF Test Suite">
+      <directory>tests</directory>
+    </testsuite>
+  </testsuites>
+  <coverage/>
+</phpunit>
