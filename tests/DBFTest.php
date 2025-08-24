@@ -3,6 +3,7 @@
 namespace ndtan;
 
 use PHPUnit\Framework\TestCase;
+use PDO;
 
 final class DBFTest extends TestCase
 {
@@ -20,7 +21,7 @@ final class DBFTest extends TestCase
                 ],
             ],
         ]);
-        // Ensure table schema includes UNIQUE constraint on email
+        // Create table with necessary columns and UNIQUE constraint
         $this->db->raw('CREATE TABLE users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             email TEXT NOT NULL UNIQUE,
@@ -52,7 +53,7 @@ final class DBFTest extends TestCase
         $this->assertNull($row);
         // Verify soft delete with withTrashed
         $row = $this->db->table('users')->withTrashed()->where('email', '=', 'a@ndtan.net')->first();
-        $this->assertNotNull($row['deleted_at']);
+        $this->assertNotNull($row['deleted_at'], 'Soft delete should set deleted_at');
     }
 
     public function testInsertMany(): void
@@ -115,7 +116,6 @@ final class DBFTest extends TestCase
         // Test policy
         $db = $db->policy(function($ctx) {
             if ($ctx['type'] === 'select' && $ctx['table'] === 'users') {
-                // Allow select on users
                 return;
             }
             throw new \RuntimeException('Policy denied');
@@ -179,9 +179,10 @@ final class DBFTest extends TestCase
         $row = $this->db->table('users')->where('email', '=', 'n@ndtan.net')->first();
         $this->assertNull($row);
         $count = $this->db->table('users')->onlyTrashed()->where('email', '=', 'n@ndtan.net')->restore();
-        $this->assertSame(1, $count);
+        $this->assertSame(1, $count, 'Restore should affect one record');
         $row = $this->db->table('users')->where('email', '=', 'n@ndtan.net')->first();
         $this->assertSame('n@ndtan.net', $row['email']);
+        $this->assertNull($row['deleted_at'], 'Restored record should have null deleted_at');
     }
 
     public function testForceDelete(): void
@@ -194,7 +195,7 @@ final class DBFTest extends TestCase
 
     public function testWhereJson(): void
     {
-        // Skip if SQLite json1 extension is not available
+        // Check for SQLite json1 extension
         $pdo = $this->db->choosePdo('select');
         if ($pdo->getAttribute(PDO::ATTR_DRIVER_NAME) === 'sqlite' && !in_array('json1', $pdo->query('PRAGMA compile_options')->fetchAll(PDO::FETCH_COLUMN))) {
             $this->markTestSkipped('SQLite json1 extension not enabled');
@@ -209,7 +210,7 @@ final class DBFTest extends TestCase
 
     public function testJsonSet(): void
     {
-        // Skip if SQLite json1 extension is not available
+        // Check for SQLite json1 extension
         $pdo = $this->db->choosePdo('select');
         if ($pdo->getAttribute(PDO::ATTR_DRIVER_NAME) === 'sqlite' && !in_array('json1', $pdo->query('PRAGMA compile_options')->fetchAll(PDO::FETCH_COLUMN))) {
             $this->markTestSkipped('SQLite json1 extension not enabled');

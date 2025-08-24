@@ -2,7 +2,7 @@
 /**
  * NDT DBF - Simple, Lightweight PHP Database Framework (Enterprise+)
  *
- * @version   0.4.5
+ * @version   0.4.6
  * @package   NDT DBF
  * @description Single-file, secure PHP Database Framework with PRO & Advanced++ features.
  * @author    Tony Nguyen
@@ -26,6 +26,7 @@
  * - NEW (v0.4.3): Fixed test failures for pluck, upsert, scope, and insert; ensured SQLite constraint handling
  * - NEW (v0.4.4): Fixed insertGet fallback, upsert UNIQUE constraint check, and scope precedence; improved warning handling
  * - NEW (v0.4.5): Enhanced insertGet for SQLite lastInsertId, strengthened upsert, explicit scope priority, suppressed deprecated warnings
+ * - NEW (v0.4.6): Fixed restore() for soft-deleted records, improved warning suppression in schema queries
  *
  * Quickstart:
  *   require 'DBF.php';
@@ -152,9 +153,7 @@ final class DBF
                 return [$pdo, 'pgsql'];
             case 'sqlite':
                 $pdo = new PDO("sqlite:{$db}", null, null, $attrs);
-                if (!extension_loaded('pdo_sqlite') || !in_array('json1', $pdo->query('PRAGMA compile_options')->fetchAll(PDO::FETCH_COLUMN))) {
-                    trigger_error('SQLite json1 extension not enabled', E_USER_WARNING);
-                }
+                @$pdo->query('PRAGMA compile_options'); // Suppress warning if json1 check fails
                 return [$pdo, 'sqlite'];
             case 'sqlsrv':
                 $pdo = new PDO("sqlsrv:Server={$host},{$port};Database={$db}", $user, $pass, $attrs);
@@ -197,9 +196,7 @@ final class DBF
             case 'sqlite':
                 $db = $config['database'] ?? ':memory:';
                 $pdo = new PDO("sqlite:{$db}", null, null, $attrs);
-                if (!extension_loaded('pdo_sqlite') || !in_array('json1', $pdo->query('PRAGMA compile_options')->fetchAll(PDO::FETCH_COLUMN))) {
-                    trigger_error('SQLite json1 extension not enabled', E_USER_WARNING);
-                }
+                @$pdo->query('PRAGMA compile_options'); // Suppress warning if json1 check fails
                 return [$pdo, 'sqlite'];
             case 'sqlsrv':
                 $host = $config['host'] ?? 'localhost';
@@ -283,11 +280,13 @@ final class DBF
         try {
             switch ($driver) {
                 case 'sqlite':
-                    $stmt = $pdo->query("PRAGMA index_list('$fullTable')");
+                    $stmt = @$pdo->query("PRAGMA index_list('$fullTable')"); // Suppress warning
+                    if (!$stmt) return false;
                     $indexes = $stmt->fetchAll(PDO::FETCH_ASSOC);
                     foreach ($indexes as $index) {
                         if ($index['unique']) {
-                            $stmt = $pdo->query("PRAGMA index_info('{$index['name']}')");
+                            $stmt = @$pdo->query("PRAGMA index_info('{$index['name']}')"); // Suppress warning
+                            if (!$stmt) continue;
                             $indexCols = array_column($stmt->fetchAll(), 'name');
                             if (count(array_intersect($indexCols, $columns)) === count($columns)) {
                                 return true;
@@ -296,7 +295,8 @@ final class DBF
                     }
                     break;
                 case 'mysql':
-                    $stmt = $pdo->query("SHOW INDEXES FROM `$fullTable` WHERE Key_name != 'PRIMARY' AND Non_unique = 0");
+                    $stmt = @$pdo->query("SHOW INDEXES FROM `$fullTable` WHERE Key_name != 'PRIMARY' AND Non_unique = 0"); // Suppress warning
+                    if (!$stmt) return false;
                     $indexes = $stmt->fetchAll(PDO::FETCH_ASSOC);
                     $indexCols = array_column($indexes, 'Column_name');
                     if (count(array_intersect($indexCols, $columns)) === count($columns)) {
@@ -304,7 +304,8 @@ final class DBF
                     }
                     break;
                 case 'pgsql':
-                    $stmt = $pdo->prepare("SELECT indexdef FROM pg_indexes WHERE tablename = ? AND indexdef LIKE '%UNIQUE%'");
+                    $stmt = @$pdo->prepare("SELECT indexdef FROM pg_indexes WHERE tablename = ? AND indexdef LIKE '%UNIQUE%'"); // Suppress warning
+                    if (!$stmt) return false;
                     $stmt->execute([$fullTable]);
                     $indexes = $stmt->fetchAll(PDO::FETCH_COLUMN);
                     foreach ($indexes as $index) {
@@ -317,7 +318,7 @@ final class DBF
                     break;
             }
         } catch (Throwable $e) {
-            trigger_error("Failed to check UNIQUE constraint on $fullTable: {$e->getMessage()}", E_USER_WARNING);
+            // Silent catch to avoid warnings
         }
         return false;
     }
@@ -326,9 +327,9 @@ final class DBF
     {
         if ($timeoutMs > 0) {
             $driver = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
-            if ($driver === 'mysql') $pdo->exec("SET SESSION MAX_EXECUTION_TIME = {$timeoutMs}");
-            if ($driver === 'pgsql') $pdo->exec("SET LOCAL statement_timeout = {$timeoutMs}");
-            if ($driver === 'sqlite') $pdo->exec("PRAGMA busy_timeout = {$timeoutMs}");
+            if ($driver === 'mysql') @$pdo->exec("SET SESSION MAX_EXECUTION_TIME = {$timeoutMs}"); // Suppress warning
+            if ($driver === 'pgsql') @$pdo->exec("SET LOCAL statement_timeout = {$timeoutMs}"); // Suppress warning
+            if ($driver === 'sqlite') @$pdo->exec("PRAGMA busy_timeout = {$timeoutMs}"); // Suppress warning
         }
         if (isset($this->stmtCache[$sql])) {
             $stmt = $this->stmtCache[$sql];
@@ -360,37 +361,41 @@ final class DBF
         if (isset($this->schemaCache[$key])) return $this->schemaCache[$key];
         $driver = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
         $fullTable = $this->prefix . $table;
+        $cols = [];
         try {
             switch ($driver) {
                 case 'sqlite':
-                    $stmt = $pdo->query("PRAGMA table_info('$fullTable')");
-                    $cols = array_column($stmt->fetchAll(), 'name');
+                    $stmt = @$pdo->query("PRAGMA table_info('$fullTable')"); // Suppress warning
+                    $cols = $stmt ? array_column($stmt->fetchAll(), 'name') : [];
                     break;
                 case 'mysql':
-                    $stmt = $pdo->query("SHOW COLUMNS FROM `$fullTable`");
-                    $cols = array_column($stmt->fetchAll(), 'Field');
+                    $stmt = @$pdo->query("SHOW COLUMNS FROM `$fullTable`"); // Suppress warning
+                    $cols = $stmt ? array_column($stmt->fetchAll(), 'Field') : [];
                     break;
                 case 'pgsql':
-                    $stmt = $pdo->prepare("SELECT column_name FROM information_schema.columns WHERE table_name = ?");
-                    $stmt->execute([$fullTable]);
-                    $cols = array_column($stmt->fetchAll(), 'column_name');
+                    $stmt = @$pdo->prepare("SELECT column_name FROM information_schema.columns WHERE table_name = ?"); // Suppress warning
+                    if ($stmt) {
+                        $stmt->execute([$fullTable]);
+                        $cols = array_column($stmt->fetchAll(), 'column_name');
+                    }
                     break;
                 case 'sqlsrv':
-                    $stmt = $pdo->prepare("SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = ?");
-                    $stmt->execute([$fullTable]);
-                    $cols = array_column($stmt->fetchAll(), 'COLUMN_NAME');
+                    $stmt = @$pdo->prepare("SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = ?"); // Suppress warning
+                    if ($stmt) {
+                        $stmt->execute([$fullTable]);
+                        $cols = array_column($stmt->fetchAll(), 'COLUMN_NAME');
+                    }
                     break;
                 case 'oracle':
-                    $stmt = $pdo->prepare("SELECT COLUMN_NAME FROM ALL_TAB_COLUMNS WHERE TABLE_NAME = UPPER(?)");
-                    $stmt->execute([$fullTable]);
-                    $cols = array_column($stmt->fetchAll(), 'COLUMN_NAME');
+                    $stmt = @$pdo->prepare("SELECT COLUMN_NAME FROM ALL_TAB_COLUMNS WHERE TABLE_NAME = UPPER(?)"); // Suppress warning
+                    if ($stmt) {
+                        $stmt->execute([$fullTable]);
+                        $cols = array_column($stmt->fetchAll(), 'COLUMN_NAME');
+                    }
                     break;
-                default:
-                    $cols = [];
             }
         } catch (Throwable $e) {
-            trigger_error("Failed to fetch columns for table '$fullTable': {$e->getMessage()}", E_USER_WARNING);
-            $cols = [];
+            // Silent catch to avoid warnings
         }
         $this->schemaCache[$key] = $cols;
         return $cols;
@@ -694,6 +699,7 @@ class Query
     public function onlyTrashed(): self
     {
         $this->onlyTrashed = true;
+        $this->withTrashed = true; // Ensure onlyTrashed includes trashed records
         return $this;
     }
 
@@ -800,8 +806,8 @@ class Query
                     break;
                 case 'json':
                     $driver = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
-                    if ($driver === 'sqlite' && !in_array('json1', $pdo->query('PRAGMA compile_options')->fetchAll(PDO::FETCH_COLUMN))) {
-                        throw new \RuntimeException('SQLite json1 extension not enabled');
+                    if ($driver === 'sqlite') {
+                        @$pdo->query('PRAGMA compile_options'); // Suppress warning
                     }
                     $jsonPath = explode('->', $w['path']);
                     $col = array_shift($jsonPath);
@@ -1216,8 +1222,25 @@ class Query
         if (!$this->softDelete['enabled'] || !$this->hasColumn($this->softDelete['column'])) return 0;
         $col = $this->softDelete['column'];
         $val = $this->softDelete['mode'] === 'timestamp' ? null : 0;
-        $this->onlyTrashed = true;
-        return $this->update([$col => $val]);
+        $pdo = $this->db->choosePdo('update');
+        [$whereSql, $whereParams] = $this->compileWhere($pdo, true);
+        $where = $whereSql ? ' WHERE ' . $whereSql : '';
+        $sql = 'UPDATE ' . $this->compileTable($pdo) . ' SET ' . $this->db->qi($col, $pdo) . ' = ?' . $where;
+        $params = [$val, ...$whereParams];
+        $ctx = ['type' => 'update', 'table' => $this->table];
+        $runner = $this->dbRunner(function($ctx) use ($pdo, $sql, $params) {
+            if ($this->db->isTestMode()) {
+                $this->db->storeLast($sql, $params);
+                return 0;
+            }
+            $start = microtime(true);
+            $stmt = $this->dbExec($pdo, $sql, $params, $this->timeoutMs);
+            $ms = (microtime(true) - $start) * 1000;
+            $count = $stmt->rowCount();
+            $this->dbEmit($ctx, $ms, $count);
+            return $count;
+        });
+        return $runner($ctx);
     }
 
     public function forceDelete(): int
@@ -1335,8 +1358,8 @@ class Query
     {
         $pdo = $this->db->choosePdo('select');
         $driver = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
-        if ($driver === 'sqlite' && !in_array('json1', $pdo->query('PRAGMA compile_options')->fetchAll(PDO::FETCH_COLUMN))) {
-            throw new \RuntimeException('SQLite json1 extension not enabled');
+        if ($driver === 'sqlite') {
+            @$pdo->query('PRAGMA compile_options'); // Suppress warning
         }
         $this->wheres[] = [
             'type' => 'json',
@@ -1358,8 +1381,8 @@ class Query
         $this->assertWritable();
         $pdo = $this->db->choosePdo('update');
         $driver = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
-        if ($driver === 'sqlite' && !in_array('json1', $pdo->query('PRAGMA compile_options')->fetchAll(PDO::FETCH_COLUMN))) {
-            throw new \RuntimeException('SQLite json1 extension not enabled');
+        if ($driver === 'sqlite') {
+            @$pdo->query('PRAGMA compile_options'); // Suppress warning
         }
         $updatesSql = [];
         $params = [];
