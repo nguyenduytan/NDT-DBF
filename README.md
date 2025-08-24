@@ -13,6 +13,9 @@ Secure by default, compact API, works as <em>one file</em> or via <strong>Compos
   <a href="https://github.com/nguyenduytan/NDT-DBF/actions">
     <img alt="CI" src="https://github.com/nguyenduytan/NDT-DBF/actions/workflows/ci.yml/badge.svg">
   </a>
+  <a href="https://packagist.org/packages/ndtan/dbf">
+    <img alt="Packagist" src="https://img.shields.io/packagist/v/ndtan/dbf.svg">
+  </a>
   <img alt="PHP" src="https://img.shields.io/badge/php-%3E%3D%208.1-777bb3">
   <img alt="License" src="https://img.shields.io/badge/license-MIT-green.svg">
 </p>

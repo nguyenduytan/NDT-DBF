@@ -1,6 +1,8 @@
 name: CI
 
-on: [push, pull_request]
+on:
+  push:
+  pull_request:
 
 jobs:
   test:
@@ -9,21 +11,21 @@ jobs:
       fail-fast: false
       matrix:
         php: ['8.1', '8.2', '8.3', '8.4']
-    # Cho phép 8.4 “được lỗi” tạm thời (nếu environment của 8.4 chưa stable)
-    continue-on-error: ${{ matrix.php == '8.4' }}
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
       - name: Setup PHP
         uses: shivammathur/setup-php@v2
         with:
           php-version: ${{ matrix.php }}
-          extensions: pdo, sqlite3, pdo_sqlite
+          extensions: pdo, sqlite3, pdo_sqlite, mbstring
           tools: composer:v2
           coverage: none
+          ini-values: error_reporting=E_ALL, zend.exception_ignore_args=0
 
-      - name: Show PHP info
+      - name: PHP info
         run: |
           php -v
           php -m
@@ -38,4 +40,4 @@ jobs:
         run: composer dump-autoload -o
 
       - name: Run PHPUnit
-        run: vendor/bin/phpunit --display-deprecations -v
+        run: vendor/bin/phpunit --display-deprecations --colors=always --verbose
