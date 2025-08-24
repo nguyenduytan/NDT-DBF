@@ -2,7 +2,7 @@
 /**
  * NDT DBF - Simple, Lightweight PHP Database Framework (Enterprise+)
  *
- * @version   0.4.6
+ * @version   0.4.7
  * @package   NDT DBF
  * @description Single-file, secure PHP Database Framework with PRO & Advanced++ features.
  * @author    Tony Nguyen
@@ -27,6 +27,7 @@
  * - NEW (v0.4.4): Fixed insertGet fallback, upsert UNIQUE constraint check, and scope precedence; improved warning handling
  * - NEW (v0.4.5): Enhanced insertGet for SQLite lastInsertId, strengthened upsert, explicit scope priority, suppressed deprecated warnings
  * - NEW (v0.4.6): Fixed restore() for soft-deleted records, improved warning suppression in schema queries
+ * - NEW (v0.4.7): Fixed soft delete to ensure deleted_at is set, enhanced restore() to include onlyTrashed condition, further suppressed SQLite warnings
  *
  * Quickstart:
  *   require 'DBF.php';
@@ -153,7 +154,7 @@ final class DBF
                 return [$pdo, 'pgsql'];
             case 'sqlite':
                 $pdo = new PDO("sqlite:{$db}", null, null, $attrs);
-                @$pdo->query('PRAGMA compile_options'); // Suppress warning if json1 check fails
+                @$pdo->exec('PRAGMA foreign_keys = ON'); // Suppress warning
                 return [$pdo, 'sqlite'];
             case 'sqlsrv':
                 $pdo = new PDO("sqlsrv:Server={$host},{$port};Database={$db}", $user, $pass, $attrs);
@@ -196,7 +197,7 @@ final class DBF
             case 'sqlite':
                 $db = $config['database'] ?? ':memory:';
                 $pdo = new PDO("sqlite:{$db}", null, null, $attrs);
-                @$pdo->query('PRAGMA compile_options'); // Suppress warning if json1 check fails
+                @$pdo->exec('PRAGMA foreign_keys = ON'); // Suppress warning
                 return [$pdo, 'sqlite'];
             case 'sqlsrv':
                 $host = $config['host'] ?? 'localhost';
@@ -699,7 +700,7 @@ class Query
     public function onlyTrashed(): self
     {
         $this->onlyTrashed = true;
-        $this->withTrashed = true; // Ensure onlyTrashed includes trashed records
+        $this->withTrashed = true;
         return $this;
     }
 
@@ -765,7 +766,7 @@ class Query
             }
         }
 
-        // Apply soft delete after scope
+        // Apply soft delete after scope for select queries
         $sdCol = $this->softDelete['column'];
         if ($forSelect && $this->softDelete['enabled'] && $this->hasColumn($sdCol) && !$this->withTrashed && !$this->onlyTrashed) {
             $andConditions[] = $this->db->qi($sdCol, $pdo) . ($this->softDelete['mode'] === 'timestamp' ? " IS NULL" : " = 0");
@@ -807,7 +808,7 @@ class Query
                 case 'json':
                     $driver = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
                     if ($driver === 'sqlite') {
-                        @$pdo->query('PRAGMA compile_options'); // Suppress warning
+                        @$pdo->exec('PRAGMA foreign_keys = ON'); // Suppress warning
                     }
                     $jsonPath = explode('->', $w['path']);
                     $col = array_shift($jsonPath);
@@ -1190,7 +1191,7 @@ class Query
             return $this->softDelete();
         }
         $pdo = $this->db->choosePdo('delete');
-        [$whereSql, $params] = $this->compileWhere($pdo, true);
+        [$whereSql, $params] = $this->compileWhere($pdo, true, false);
         $where = $whereSql ? ' WHERE ' . $whereSql : '';
         $sql = 'DELETE FROM ' . $this->compileTable($pdo) . $where;
         $ctx = ['type' => 'delete', 'table' => $this->table];
@@ -1212,18 +1213,39 @@ class Query
     private function softDelete(): int
     {
         $col = $this->softDelete['column'];
-        $val = $this->softDelete['mode'] === 'timestamp' ? date('c') : $this->softDelete['deleted_value'];
-        return $this->update([$col => $val]);
+        $val = $this->softDelete['mode'] === 'timestamp' ? date('Y-m-d H:i:s') : $this->softDelete['deleted_value'];
+        $pdo = $this->db->choosePdo('update');
+        [$whereSql, $whereParams] = $this->compileWhere($pdo, true, false);
+        $where = $whereSql ? ' WHERE ' . $whereSql : '';
+        $sql = 'UPDATE ' . $this->compileTable($pdo) . ' SET ' . $this->db->qi($col, $pdo) . ' = ?' . $where;
+        $params = [$val, ...$whereParams];
+        $ctx = ['type' => 'update', 'table' => $this->table];
+        $runner = $this->dbRunner(function($ctx) use ($pdo, $sql, $params) {
+            if ($this->db->isTestMode()) {
+                $this->db->storeLast($sql, $params);
+                return 0;
+            }
+            $start = microtime(true);
+            $stmt = $this->dbExec($pdo, $sql, $params, $this->timeoutMs);
+            $ms = (microtime(true) - $start) * 1000;
+            $count = $stmt->rowCount();
+            $this->dbEmit($ctx, $ms, $count);
+            return $count;
+        });
+        return $runner($ctx);
     }
 
     public function restore(): int
     {
         $this->assertWritable();
-        if (!$this->softDelete['enabled'] || !$this->hasColumn($this->softDelete['column'])) return 0;
+        if (!$this->softDelete['enabled'] || !$this->hasColumn($this->softDelete['column'])) {
+            return 0;
+        }
+        $this->onlyTrashed(); // Ensure onlyTrashed is applied
         $col = $this->softDelete['column'];
         $val = $this->softDelete['mode'] === 'timestamp' ? null : 0;
         $pdo = $this->db->choosePdo('update');
-        [$whereSql, $whereParams] = $this->compileWhere($pdo, true);
+        [$whereSql, $whereParams] = $this->compileWhere($pdo, true, false);
         $where = $whereSql ? ' WHERE ' . $whereSql : '';
         $sql = 'UPDATE ' . $this->compileTable($pdo) . ' SET ' . $this->db->qi($col, $pdo) . ' = ?' . $where;
         $params = [$val, ...$whereParams];
@@ -1359,7 +1381,7 @@ class Query
         $pdo = $this->db->choosePdo('select');
         $driver = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
         if ($driver === 'sqlite') {
-            @$pdo->query('PRAGMA compile_options'); // Suppress warning
+            @$pdo->exec('PRAGMA foreign_keys = ON'); // Suppress warning
         }
         $this->wheres[] = [
             'type' => 'json',
@@ -1382,7 +1404,7 @@ class Query
         $pdo = $this->db->choosePdo('update');
         $driver = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
         if ($driver === 'sqlite') {
-            @$pdo->query('PRAGMA compile_options'); // Suppress warning
+            @$pdo->exec('PRAGMA foreign_keys = ON'); // Suppress warning
         }
         $updatesSql = [];
         $params = [];
