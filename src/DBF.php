@@ -745,20 +745,20 @@ class Query
     private function compileWhere(PDO $pdo, bool $includeScope, bool $forSelect = false): array
     {
         $bind = [];
-        $conditions = [];
+        $non_user_conditions = [];
         $driver = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
         $sdCol = $this->softDelete['column'];
 
         // Apply onlyTrashed for restore operations
         if ($this->onlyTrashed && $this->softDelete['enabled'] && $this->hasColumn($sdCol)) {
             $sdColQuoted = $this->db->qi($sdCol, $pdo);
-            $conditions[] = $sdColQuoted . ($this->softDelete['mode'] === 'timestamp' ? ' IS NOT NULL' : ' = ' . $this->softDelete['deleted_value']);
+            $non_user_conditions[] = $sdColQuoted . ($this->softDelete['mode'] === 'timestamp' ? ' IS NOT NULL' : ' = ' . $this->softDelete['deleted_value']);
         }
 
         // Apply scope
         if ($includeScope && $this->scope) {
             foreach ($this->scope as $k => $v) {
-                $conditions[] = $this->db->qi($k, $pdo) . ' = ?';
+                $non_user_conditions[] = $this->db->qi($k, $pdo) . ' = ?';
                 $bind[] = $v;
             }
         }
@@ -766,35 +766,41 @@ class Query
         // Apply soft delete for select queries (unless withTrashed or onlyTrashed)
         if ($forSelect && $this->softDelete['enabled'] && $this->hasColumn($sdCol) && !$this->withTrashed && !$this->onlyTrashed) {
             $sdColQuoted = $this->db->qi($sdCol, $pdo);
-            $conditions[] = $sdColQuoted . ($this->softDelete['mode'] === 'timestamp' ? ' IS NULL' : ' = 0');
+            $non_user_conditions[] = $sdColQuoted . ($this->softDelete['mode'] === 'timestamp' ? ' IS NULL' : ' = 0');
         }
+
+        // Join non-user conditions with AND
+        $baseWhere = $non_user_conditions ? implode(' AND ', $non_user_conditions) : '';
+
+        // Start parts with baseWhere if exists
+        $parts = $baseWhere ? [$baseWhere] : [];
 
         // Apply user-defined wheres
         foreach ($this->wheres as $idx => $w) {
-            $prefix = (empty($conditions) && $idx === 0) ? '' : ' ' . $w['bool'] . ' ';
+            $prefix = empty($parts) ? '' : ' ' . $w['bool'] . ' ';
             switch ($w['type']) {
                 case 'basic':
-                    $conditions[] = $prefix . $this->db->qi($w['col'], $pdo) . ' ' . $w['op'] . ' ?';
+                    $parts[] = $prefix . $this->db->qi($w['col'], $pdo) . ' ' . $w['op'] . ' ?';
                     $bind[] = $w['val'];
                     break;
                 case 'in':
                     $vals = $w['vals'];
                     if (count($vals) > $this->db->guardMaxIn()) throw new \LengthException('whereIn list exceeds ' . $this->db->guardMaxIn() . ' items');
                     if (empty($vals)) {
-                        $conditions[] = $prefix . ($w['not'] ? '1=1' : '1=0');
+                        $parts[] = $prefix . ($w['not'] ? '1=1' : '1=0');
                         break;
                     }
                     $qs = implode(',', array_fill(0, count($vals), '?'));
-                    $conditions[] = $prefix . $this->db->qi($w['col'], $pdo) . ($w['not'] ? ' NOT IN (' : ' IN (') . $qs . ')';
+                    $parts[] = $prefix . $this->db->qi($w['col'], $pdo) . ($w['not'] ? ' NOT IN (' : ' IN (') . $qs . ')';
                     $bind = array_merge($bind, array_values($vals));
                     break;
                 case 'null':
-                    $conditions[] = $prefix . $this->db->qi($w['col'], $pdo) . ($w['not'] ? ' IS NOT NULL' : ' IS NULL');
+                    $parts[] = $prefix . $this->db->qi($w['col'], $pdo) . ($w['not'] ? ' IS NOT NULL' : ' IS NULL');
                     break;
                 case 'between':
                     $pair = $w['pair'];
                     if (!is_array($pair) || count($pair) !== 2) throw new \InvalidArgumentException('whereBetween requires [min,max]');
-                    $conditions[] = $prefix . $this->db->qi($w['col'], $pdo) . ($w['not'] ? ' NOT BETWEEN ? AND ?' : ' BETWEEN ? AND ?');
+                    $parts[] = $prefix . $this->db->qi($w['col'], $pdo) . ($w['not'] ? ' NOT BETWEEN ? AND ?' : ' BETWEEN ? AND ?');
                     $bind[] = $pair[0];
                     $bind[] = $pair[1];
                     break;
@@ -803,13 +809,13 @@ class Query
                     $col = array_shift($jsonPath);
                     if ($driver === 'mysql') {
                         $path = implode('.', $jsonPath);
-                        $conditions[] = $prefix . 'JSON_EXTRACT(' . $this->db->qi($col, $pdo) . ", '$.{$path}') " . $w['op'] . ' ?';
+                        $parts[] = $prefix . 'JSON_EXTRACT(' . $this->db->qi($col, $pdo) . ", '$.{$path}') " . $w['op'] . ' ?';
                     } elseif ($driver === 'pgsql') {
                         $path = implode('->>', $jsonPath);
-                        $conditions[] = $prefix . $this->db->qi($col, $pdo) . "->>'{$path}' " . $w['op'] . ' ?';
+                        $parts[] = $prefix . $this->db->qi($col, $pdo) . "->>'{$path}' " . $w['op'] . ' ?';
                     } elseif ($driver === 'sqlite') {
                         $path = implode('.', $jsonPath);
-                        $conditions[] = $prefix . 'json_extract(' . $this->db->qi($col, $pdo) . ", '$.{$path}') " . $w['op'] . ' ?';
+                        $parts[] = $prefix . 'json_extract(' . $this->db->qi($col, $pdo) . ", '$.{$path}') " . $w['op'] . ' ?';
                     } else {
                         throw new \RuntimeException('whereJson not supported on ' . $driver);
                     }
@@ -818,8 +824,8 @@ class Query
             }
         }
 
-        // Join conditions with AND if multiple conditions exist
-        $sql = empty($conditions) ? '' : implode(' AND ', $conditions);
+        // Join parts without extra operators, as prefixes are already included
+        $sql = implode('', $parts);
         return [$sql, $bind];
     }
 
