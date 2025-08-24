@@ -2,7 +2,7 @@
 /**
  * NDT DBF - Simple, Lightweight PHP Database Framework (Enterprise+)
  *
- * @version   0.4.4
+ * @version   0.4.5
  * @package   NDT DBF
  * @description Single-file, secure PHP Database Framework with PRO & Advanced++ features.
  * @author    Tony Nguyen
@@ -25,6 +25,7 @@
  * - NEW (v0.4.2): Fixed sum cast to int, improved upsert and scope handling, ensured soft delete compatibility
  * - NEW (v0.4.3): Fixed test failures for pluck, upsert, scope, and insert; ensured SQLite constraint handling
  * - NEW (v0.4.4): Fixed insertGet fallback, upsert UNIQUE constraint check, and scope precedence; improved warning handling
+ * - NEW (v0.4.5): Enhanced insertGet for SQLite lastInsertId, strengthened upsert, explicit scope priority, suppressed deprecated warnings
  *
  * Quickstart:
  *   require 'DBF.php';
@@ -136,7 +137,11 @@ final class DBF
         $query = [];
         parse_str($parsed['query'] ?? '', $query);
         $charset = $query['charset'] ?? 'utf8mb4';
-        $attrs = [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION, PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC];
+        $attrs = [
+            PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+            PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+            PDO::ATTR_EMULATE_PREPARES => false,
+        ];
 
         switch ($driver) {
             case 'mysql':
@@ -165,7 +170,11 @@ final class DBF
     private function connectFromArray(array $config): array
     {
         $driver = $config['type'] ?? 'mysql';
-        $attrs = [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION, PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC];
+        $attrs = [
+            PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+            PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+            PDO::ATTR_EMULATE_PREPARES => false,
+        ];
 
         switch ($driver) {
             case 'mysql':
@@ -617,7 +626,7 @@ class Query
     public function join(string $table, string $left, string $op, string $right, string $type = 'INNER'): self
     {
         $this->joins[] = [
-            'type' => 'INNER',
+            'type' => $type,
             'table' => $table,
             'left' => $left,
             'op' => $op,
@@ -742,6 +751,7 @@ class Query
         $bind = [];
         $andConditions = [];
 
+        // Apply scope first
         if ($includeScope && $this->scope) {
             foreach ($this->scope as $k => $v) {
                 $andConditions[] = $this->db->qi($k, $pdo) . " = ?";
@@ -749,6 +759,7 @@ class Query
             }
         }
 
+        // Apply soft delete after scope
         $sdCol = $this->softDelete['column'];
         if ($forSelect && $this->softDelete['enabled'] && $this->hasColumn($sdCol) && !$this->withTrashed && !$this->onlyTrashed) {
             $andConditions[] = $this->db->qi($sdCol, $pdo) . ($this->softDelete['mode'] === 'timestamp' ? " IS NULL" : " = 0");
@@ -1125,6 +1136,10 @@ class Query
                 $id = (int)$pdo->lastInsertId();
                 $res = $this->db->table($this->table)->select($returning)->withTrashed()->where('id', '=', $id)->first();
             }
+            // Fallback for SQLite if lastInsertId fails
+            if (!$res && $driver === 'sqlite') {
+                $res = $this->db->table($this->table)->select($returning)->withTrashed()->where($cols[0], '=', $data[$cols[0]])->first();
+            }
             $this->dbEmit($ctx, $ms, 1);
             return $res ?: [];
         });
@@ -1226,6 +1241,9 @@ class Query
         $updateSets = [];
         $params = array_values($data);
         foreach ($updateColumns as $col) {
+            if (!in_array($col, $cols)) {
+                throw new \InvalidArgumentException("Update column '$col' not in insert data");
+            }
             $updateSets[] = $this->db->qi($col, $pdo) . ' = EXCLUDED.' . $this->db->qi($col, $pdo);
         }
         $updateClause = implode(',', $updateSets);
