@@ -12,24 +12,19 @@ final class DBFTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
-        $this->db = new DBF('sqlite::memory:', [
+        $this->db = new \ndtan\DBF([
+            'type' => 'sqlite',
+            'database' => ':memory:',
             'features' => [
                 'soft_delete' => [
                     'enabled' => true,
                     'column' => 'deleted_at',
-                    'mode' => 'timestamp',
-                ],
-            ],
+                    'mode' => 'timestamp'
+                ]
+            ]
         ]);
-        // Create table with necessary columns and UNIQUE constraint
-        $this->db->raw('CREATE TABLE users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            email TEXT NOT NULL UNIQUE,
-            status TEXT,
-            score INTEGER,
-            data TEXT,
-            deleted_at TEXT
-        )');
+        // Create test table with deleted_at column
+        $this->db->raw("CREATE TABLE test_table (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, deleted_at TIMESTAMP)");
     }
 
     public function testInsertSelectUpdateDelete(): void
