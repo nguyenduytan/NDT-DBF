@@ -20,8 +20,6 @@
  * - PRO: Master/Replica routing (auto/manual)
  * - Advanced++: Readonly/Maintenance mode; Soft Delete guard (withTrashed/onlyTrashed/restore/forceDelete)
  * - Advanced++: Per-query timeout (MySQL/PG best-effort)
- * - NEW (PRO parity): Aggregates helpers sum/avg/min/max + pluck
- * - NEW (DX): Test Mode ($db->setTestMode(true)) + last query string/params getters
  * - NEW (v0.4.0): Row locking (forUpdate/skipLocked), chunk/stream for large datasets, JSON helpers (whereJson/jsonSet), cast DSL, Oracle support
  *
  * Quickstart:
@@ -77,23 +75,16 @@ final class DBF
     /** @var array Soft delete configuration */
     private array $softDelete = [
         'enabled' => false,
-        'column'  => 'deleted_at', // or 'is_deleted'
-        'mode'    => 'timestamp',  // 'timestamp' | 'boolean'
-        'deleted_value' => 1,      // for boolean mode
+        'column'  => 'deleted_at',
+        'mode'    => 'timestamp',
+        'deleted_value' => 1,
     ];
 
     /** --- Test Mode & last query tracking --- */
     private bool $testMode = false;
     private string $lastQueryString = '';
-    private array  $lastQueryParams = [];
+    private array $lastQueryParams = [];
 
-    /**
-     * Create a DBF instance.
-     *
-     * @param string|array|null $configOrUri
-     * - string: URI like "mysql://user:pass@host:port/db?charset=utf8mb4"
-     * - array:  Medoo-like config or advanced options (see README)
-     */
     public function __construct(string|array|null $configOrUri = null)
     {
         if ($configOrUri === null) {
@@ -116,7 +107,6 @@ final class DBF
                 $this->driverWrite = $driver;
                 $this->routing = 'single';
             }
-            // Global options
             if (isset($configOrUri['prefix'])) $this->prefix = (string)$configOrUri['prefix'];
             if (isset($configOrUri['readonly'])) $this->readonly = (bool)$configOrUri['readonly'];
             if (isset($configOrUri['logger'])) $this->logger = $configOrUri['logger'];
@@ -279,8 +269,7 @@ final class DBF
     public function choosePdo(string $type): PDO
     {
         if ($this->routing === 'single') return $this->pdoWrite;
-        if ($this->routing === 'manual') return $this->currentRoute === 'read' ? $this->pdoRead : $this->pdoWrite;
-        // auto: read for select, write for others
+        if ($this->routing === 'manual') return $this->currentRoute === 'read' && $this->pdoRead ? $this->pdoRead : $this->pdoWrite;
         return in_array($type, ['select', 'aggregate']) && $this->pdoRead ? $this->pdoRead : $this->pdoWrite;
     }
 
@@ -332,8 +321,8 @@ final class DBF
                 return $res;
             } catch (Throwable $e) {
                 $this->pdoWrite->rollBack();
-                if ($i === $attempts || !in_array($e->getCode(), [40001, '40001', '1213'])) throw $e; // Deadlock codes
-                usleep((2 ** $i) * 100000 + mt_rand(0, 100000)); // Exponential backoff + jitter
+                if ($i === $attempts || !in_array($e->getCode(), [40001, '40001', '1213'])) throw $e;
+                usleep((2 ** $i) * 100000 + mt_rand(0, 100000));
             }
         }
         return null;
@@ -385,14 +374,16 @@ final class DBF
 
     public function policy(callable $cb): self
     {
-        $this->policy = $cb;
-        return $this;
+        $clone = clone $this;
+        $clone->policy = $cb;
+        return $clone;
     }
 
     public function use(callable $mw): self
     {
-        $this->middlewares[] = $mw;
-        return $this;
+        $clone = clone $this;
+        $clone->middlewares[] = $mw;
+        return $clone;
     }
 
     public function setLogger(callable $cb): void
@@ -440,6 +431,25 @@ final class DBF
         });
         return $runner($ctx);
     }
+
+    public function dbBuildRunner(callable $core): callable
+    {
+        $stack = $this->middlewares;
+        $runner = array_reduce(array_reverse($stack), function($next, $mw) {
+            return function($ctx) use ($mw, $next) { return $mw($ctx, $next); };
+        }, $core);
+        return function($ctx) use ($runner) {
+            if ($this->policy) call_user_func($this->policy, $ctx);
+            return $runner($ctx);
+        };
+    }
+
+    public function storeLast(string $sql, array $params): void
+    {
+        $this->lastQueryString = $sql;
+        $this->lastQueryParams = $params;
+        if ($this->logger) call_user_func($this->logger, $sql, $params, 0.0);
+    }
 }
 
 class Query
@@ -466,7 +476,7 @@ class Query
     {
         $this->db = $db;
         $this->table = $table;
-        $this->softDelete = $db->softDelete; // Assume public or reflection
+        $this->softDelete = $db->softDelete;
         $this->scope = $db->scope;
     }
 
@@ -616,7 +626,7 @@ class Query
 
     private function compileSelect(PDO $pdo): array
     {
-        $select = 'SELECT ' . implode(', ', array_map(fn($c) => $this->db->qi($c, $pdo), $this->select));
+        $select = 'SELECT ' . implode(', ', array_map(fn($c) => is_string($c) ? $this->db->qi($c, $pdo) : $c, $this->select));
         $from = 'FROM ' . $this->compileTable($pdo);
         $join = '';
         foreach ($this->joins as $j) {
@@ -644,12 +654,9 @@ class Query
             }
             $order = ' ORDER BY ' . implode(', ', $oParts);
         }
-        $limit = $this->limit ? ' LIMIT ' . $this->limit : '';
-        $offset = $this->offset ? ' OFFSET ' . $this->offset : '';
-        $locking = '';
-        if ($this->forUpdate) {
-            $locking = ' FOR UPDATE' . ($this->skipLocked ? ' SKIP LOCKED' : '');
-        }
+        $limit = $this->limit !== null ? ' LIMIT ' . $this->limit : '';
+        $offset = $this->offset !== null ? ' OFFSET ' . $this->offset : '';
+        $locking = $this->forUpdate ? ' FOR UPDATE' . ($this->skipLocked ? ' SKIP LOCKED' : '') : '';
         $sql = $select . $from . $join . $where . $group . $having . $order . $limit . $offset . $locking;
         return [$sql, $bind];
     }
@@ -737,17 +744,7 @@ class Query
 
     private function dbRunner(callable $core): callable
     {
-        $mwCore = $this->dbBuildRunner($core);
-        return $mwCore;
-    }
-
-    private function dbBuildRunner(callable $core): callable
-    {
-        $stack = $this->middlewares;
-        $runner = array_reduce(array_reverse($stack), function($next, $mw) {
-            return function($ctx) use ($mw, $next) { return $mw($ctx, $next); };
-        }, $core);
-        return function($ctx) { if ($this->policy) call_user_func($this->policy, $ctx); return $runner($ctx); };
+        return $this->db->dbBuildRunner($core);
     }
 
     private function dbExec(PDO $pdo, string $sql, array $params, int $timeoutMs = 0): PDOStatement
@@ -760,26 +757,9 @@ class Query
         $this->db->emitMetrics($ctx, $ms, $count);
     }
 
-    private function dbPdoRead(): ?PDO
-    {
-        return $this->db->pdoRead;
-    }
-
-    private function dbPdoWrite(): PDO
-    {
-        return $this->db->pdoWrite;
-    }
-
     private function assertWritable(): void
     {
         if ($this->db->isReadonly()) throw new \RuntimeException('Readonly mode: write operation blocked.');
-    }
-
-    private function storeLast(string $sql, array $params): void
-    {
-        $this->db->lastQueryString = $sql;
-        $this->db->lastQueryParams = $params;
-        if ($this->db->logger) call_user_func($this->db->logger, $sql, $params, 0.0);
     }
 
     private function hasColumn(string $column): bool
@@ -796,7 +776,7 @@ class Query
         $ctx = ['type' => 'select', 'table' => $this->table];
         $runner = $this->dbRunner(function($ctx) use ($pdo, $sql, $params) {
             if ($this->db->isTestMode()) {
-                $this->storeLast($sql, $params);
+                $this->db->storeLast($sql, $params);
                 return [];
             }
             $start = microtime(true);
@@ -810,9 +790,408 @@ class Query
         return $runner($ctx);
     }
 
-    // ... (Tương tự cho first, exists, count, sum, avg, min, max, pluck, insert, insertMany, insertGet, update, delete, restore, forceDelete, upsert, getKeyset, chunk, stream, whereJson, cast)
+    public function first(): ?array
+    {
+        $this->limit(1);
+        $rows = $this->get();
+        return $rows[0] ?? null;
+    }
 
-    // Ví dụ cho chunk và stream
+    public function exists(): bool
+    {
+        $pdo = $this->db->choosePdo('select');
+        [$sql, $params] = $this->compileSelect($pdo);
+        $sql = 'SELECT EXISTS (' . $sql . ') AS "exists"';
+        $ctx = ['type' => 'select', 'table' => $this->table];
+        $runner = $this->dbRunner(function($ctx) use ($pdo, $sql, $params) {
+            if ($this->db->isTestMode()) {
+                $this->db->storeLast($sql, $params);
+                return false;
+            }
+            $start = microtime(true);
+            $stmt = $this->dbExec($pdo, $sql, $params, $this->timeoutMs);
+            $ms = (microtime(true) - $start) * 1000;
+            $res = $stmt->fetchColumn(0);
+            $this->dbEmit($ctx, $ms, 1);
+            return (bool)$res;
+        });
+        return $runner($ctx);
+    }
+
+    public function count(): int
+    {
+        $pdo = $this->db->choosePdo('aggregate');
+        [$whereSql, $params] = $this->compileWhere($pdo, true, true);
+        $where = $whereSql ? ' WHERE ' . $whereSql : '';
+        $sql = 'SELECT COUNT(*) FROM ' . $this->compileTable($pdo) . $where;
+        $ctx = ['type' => 'aggregate', 'table' => $this->table];
+        $runner = $this->dbRunner(function($ctx) use ($pdo, $sql, $params) {
+            if ($this->db->isTestMode()) {
+                $this->db->storeLast($sql, $params);
+                return 0;
+            }
+            $start = microtime(true);
+            $stmt = $this->dbExec($pdo, $sql, $params, $this->timeoutMs);
+            $ms = (microtime(true) - $start) * 1000;
+            $res = (int)$stmt->fetchColumn();
+            $this->dbEmit($ctx, $ms, 1);
+            return $res;
+        });
+        return $runner($ctx);
+    }
+
+    public function sum(string $col): float
+    {
+        $pdo = $this->db->choosePdo('aggregate');
+        [$whereSql, $params] = $this->compileWhere($pdo, true, true);
+        $where = $whereSql ? ' WHERE ' . $whereSql : '';
+        $sql = 'SELECT SUM(' . $this->db->qi($col, $pdo) . ') FROM ' . $this->compileTable($pdo) . $where;
+        $ctx = ['type' => 'aggregate', 'table' => $this->table];
+        $runner = $this->dbRunner(function($ctx) use ($pdo, $sql, $params) {
+            if ($this->db->isTestMode()) {
+                $this->db->storeLast($sql, $params);
+                return 0.0;
+            }
+            $start = microtime(true);
+            $stmt = $this->dbExec($pdo, $sql, $params, $this->timeoutMs);
+            $ms = (microtime(true) - $start) * 1000;
+            $res = $stmt->fetchColumn();
+            $this->dbEmit($ctx, $ms, 1);
+            return $res === null ? 0.0 : (float)$res;
+        });
+        return $runner($ctx);
+    }
+
+    public function avg(string $col): float
+    {
+        $pdo = $this->db->choosePdo('aggregate');
+        [$whereSql, $params] = $this->compileWhere($pdo, true, true);
+        $where = $whereSql ? ' WHERE ' . $whereSql : '';
+        $sql = 'SELECT AVG(' . $this->db->qi($col, $pdo) . ') FROM ' . $this->compileTable($pdo) . $where;
+        $ctx = ['type' => 'aggregate', 'table' => $this->table];
+        $runner = $this->dbRunner(function($ctx) use ($pdo, $sql, $params) {
+            if ($this->db->isTestMode()) {
+                $this->db->storeLast($sql, $params);
+                return 0.0;
+            }
+            $start = microtime(true);
+            $stmt = $this->dbExec($pdo, $sql, $params, $this->timeoutMs);
+            $ms = (microtime(true) - $start) * 1000;
+            $res = $stmt->fetchColumn();
+            $this->dbEmit($ctx, $ms, 1);
+            return $res === null ? 0.0 : (float)$res;
+        });
+        return $runner($ctx);
+    }
+
+    public function min(string $col): mixed
+    {
+        $pdo = $this->db->choosePdo('aggregate');
+        [$whereSql, $params] = $this->compileWhere($pdo, true, true);
+        $where = $whereSql ? ' WHERE ' . $whereSql : '';
+        $sql = 'SELECT MIN(' . $this->db->qi($col, $pdo) . ') FROM ' . $this->compileTable($pdo) . $where;
+        $ctx = ['type' => 'aggregate', 'table' => $this->table];
+        $runner = $this->dbRunner(function($ctx) use ($pdo, $sql, $params) {
+            if ($this->db->isTestMode()) {
+                $this->db->storeLast($sql, $params);
+                return null;
+            }
+            $start = microtime(true);
+            $stmt = $this->dbExec($pdo, $sql, $params, $this->timeoutMs);
+            $ms = (microtime(true) - $start) * 1000;
+            $res = $stmt->fetchColumn();
+            $this->dbEmit($ctx, $ms, 1);
+            return $res;
+        });
+        return $runner($ctx);
+    }
+
+    public function max(string $col): mixed
+    {
+        $pdo = $this->db->choosePdo('aggregate');
+        [$whereSql, $params] = $this->compileWhere($pdo, true, true);
+        $where = $whereSql ? ' WHERE ' . $whereSql : '';
+        $sql = 'SELECT MAX(' . $this->db->qi($col, $pdo) . ') FROM ' . $this->compileTable($pdo) . $where;
+        $ctx = ['type' => 'aggregate', 'table' => $this->table];
+        $runner = $this->dbRunner(function($ctx) use ($pdo, $sql, $params) {
+            if ($this->db->isTestMode()) {
+                $this->db->storeLast($sql, $params);
+                return null;
+            }
+            $start = microtime(true);
+            $stmt = $this->dbExec($pdo, $sql, $params, $this->timeoutMs);
+            $ms = (microtime(true) - $start) * 1000;
+            $res = $stmt->fetchColumn();
+            $this->dbEmit($ctx, $ms, 1);
+            return $res;
+        });
+        return $runner($ctx);
+    }
+
+    public function pluck(string $col, ?string $key = null): array
+    {
+        $pdo = $this->db->choosePdo('select');
+        [$sql, $params] = $this->compileSelect($pdo);
+        $ctx = ['type' => 'select', 'table' => $this->table];
+        $runner = $this->dbRunner(function($ctx) use ($pdo, $sql, $params, $col, $key) {
+            if ($this->db->isTestMode()) {
+                $this->db->storeLast($sql, $params);
+                return [];
+            }
+            $start = microtime(true);
+            $stmt = $this->dbExec($pdo, $sql, $params, $this->timeoutMs);
+            $ms = (microtime(true) - $start) * 1000;
+            $res = [];
+            if ($key) {
+                while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+                    $res[$row[$key]] = $row[$col];
+                }
+            } else {
+                while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+                    $res[] = $row[$col];
+                }
+            }
+            $this->dbEmit($ctx, $ms, count($res));
+            return $res;
+        });
+        return $runner($ctx);
+    }
+
+    public function insert(array $data): int
+    {
+        $this->assertWritable();
+        $pdo = $this->db->choosePdo('insert');
+        $cols = array_keys($data);
+        $placeholders = implode(',', array_fill(0, count($cols), '?'));
+        $sql = 'INSERT INTO ' . $this->compileTable($pdo) . ' (' . implode(',', array_map(fn($c) => $this->db->qi($c, $pdo), $cols)) . ') VALUES (' . $placeholders . ')';
+        $params = array_values($data);
+        $ctx = ['type' => 'insert', 'table' => $this->table];
+        $runner = $this->dbRunner(function($ctx) use ($pdo, $sql, $params) {
+            if ($this->db->isTestMode()) {
+                $this->db->storeLast($sql, $params);
+                return 0;
+            }
+            $start = microtime(true);
+            $stmt = $this->dbExec($pdo, $sql, $params, $this->timeoutMs);
+            $ms = (microtime(true) - $start) * 1000;
+            $id = (int)$pdo->lastInsertId();
+            $this->dbEmit($ctx, $ms, 1);
+            return $id;
+        });
+        return $runner($ctx);
+    }
+
+    public function insertMany(array $rows): array
+    {
+        $this->assertWritable();
+        $pdo = $this->db->choosePdo('insert');
+        if (empty($rows)) return [];
+        $cols = array_keys($rows[0]);
+        $placeholders = '(' . implode(',', array_fill(0, count($cols), '?')) . ')';
+        $sql = 'INSERT INTO ' . $this->compileTable($pdo) . ' (' . implode(',', array_map(fn($c) => $this->db->qi($c, $pdo), $cols)) . ') VALUES ' . implode(',', array_fill(0, count($rows), $placeholders));
+        $params = [];
+        foreach ($rows as $row) {
+            $params = array_merge($params, array_values($row));
+        }
+        $ctx = ['type' => 'insert', 'table' => $this->table];
+        $runner = $this->dbRunner(function($ctx) use ($pdo, $sql, $params) {
+            if ($this->db->isTestMode()) {
+                $this->db->storeLast($sql, $params);
+                return [];
+            }
+            $start = microtime(true);
+            $stmt = $this->dbExec($pdo, $sql, $params, $this->timeoutMs);
+            $ms = (microtime(true) - $start) * 1000;
+            $count = $stmt->rowCount();
+            $ids = [];
+            if ($count > 0) {
+                $lastId = (int)$pdo->lastInsertId();
+                $ids = range($lastId - $count + 1, $lastId);
+            }
+            $this->dbEmit($ctx, $ms, $count);
+            return $ids;
+        });
+        return $runner($ctx);
+    }
+
+    public function insertGet(array $data, array $returning): array
+    {
+        $this->assertWritable();
+        $pdo = $this->db->choosePdo('insert');
+        $cols = array_keys($data);
+        $placeholders = implode(',', array_fill(0, count($cols), '?'));
+        $returnCols = implode(',', array_map(fn($c) => $this->db->qi($c, $pdo), $returning));
+        $driver = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
+        $sql = 'INSERT INTO ' . $this->compileTable($pdo) . ' (' . implode(',', array_map(fn($c) => $this->db->qi($c, $pdo), $cols)) . ') VALUES (' . $placeholders . ')';
+        if ($driver === 'pgsql' || $driver === 'sqlite') {
+            $sql .= ' RETURNING ' . $returnCols;
+        }
+        $params = array_values($data);
+        $ctx = ['type' => 'insert', 'table' => $this->table];
+        $runner = $this->dbRunner(function($ctx) use ($pdo, $sql, $params, $driver, $returning) {
+            if ($this->db->isTestMode()) {
+                $this->db->storeLast($sql, $params);
+                return [];
+            }
+            $start = microtime(true);
+            $stmt = $this->dbExec($pdo, $sql, $params, $this->timeoutMs);
+            $ms = (microtime(true) - $start) * 1000;
+            if ($driver === 'pgsql' || $driver === 'sqlite') {
+                $res = $stmt->fetch(PDO::FETCH_ASSOC);
+            } else {
+                $id = (int)$pdo->lastInsertId();
+                $res = $this->select($returning)->where('id', '=', $id)->first();
+            }
+            $this->dbEmit($ctx, $ms, 1);
+            return $res ?: [];
+        });
+        return $runner($ctx);
+    }
+
+    public function update(array $data): int
+    {
+        $this->assertWritable();
+        $pdo = $this->db->choosePdo('update');
+        $sets = [];
+        $params = [];
+        foreach ($data as $col => $val) {
+            $sets[] = $this->db->qi($col, $pdo) . ' = ?';
+            $params[] = $val;
+        }
+        $setClause = implode(',', $sets);
+        [$whereSql, $whereParams] = $this->compileWhere($pdo, true);
+        $where = $whereSql ? ' WHERE ' . $whereSql : '';
+        $sql = 'UPDATE ' . $this->compileTable($pdo) . ' SET ' . $setClause . $where;
+        $params = array_merge($params, $whereParams);
+        $ctx = ['type' => 'update', 'table' => $this->table];
+        $runner = $this->dbRunner(function($ctx) use ($pdo, $sql, $params) {
+            if ($this->db->isTestMode()) {
+                $this->db->storeLast($sql, $params);
+                return 0;
+            }
+            $start = microtime(true);
+            $stmt = $this->dbExec($pdo, $sql, $params, $this->timeoutMs);
+            $ms = (microtime(true) - $start) * 1000;
+            $count = $stmt->rowCount();
+            $this->dbEmit($ctx, $ms, $count);
+            return $count;
+        });
+        return $runner($ctx);
+    }
+
+    public function delete(): int
+    {
+        $this->assertWritable();
+        if ($this->softDelete['enabled'] && $this->hasColumn($this->softDelete['column'])) {
+            return $this->softDelete();
+        }
+        $pdo = $this->db->choosePdo('delete');
+        [$whereSql, $params] = $this->compileWhere($pdo, true);
+        $where = $whereSql ? ' WHERE ' . $whereSql : '';
+        $sql = 'DELETE FROM ' . $this->compileTable($pdo) . $where;
+        $ctx = ['type' => 'delete', 'table' => $this->table];
+        $runner = $this->dbRunner(function($ctx) use ($pdo, $sql, $params) {
+            if ($this->db->isTestMode()) {
+                $this->db->storeLast($sql, $params);
+                return 0;
+            }
+            $start = microtime(true);
+            $stmt = $this->dbExec($pdo, $sql, $params, $this->timeoutMs);
+            $ms = (microtime(true) - $start) * 1000;
+            $count = $stmt->rowCount();
+            $this->dbEmit($ctx, $ms, $count);
+            return $count;
+        });
+        return $runner($ctx);
+    }
+
+    private function softDelete(): int
+    {
+        $col = $this->softDelete['column'];
+        $val = $this->softDelete['mode'] === 'timestamp' ? date('c') : $this->softDelete['deleted_value'];
+        return $this->update([$col => $val]);
+    }
+
+    public function restore(): int
+    {
+        $this->assertWritable();
+        if (!$this->softDelete['enabled'] || !$this->hasColumn($this->softDelete['column'])) return 0;
+        $col = $this->softDelete['column'];
+        $val = $this->softDelete['mode'] === 'timestamp' ? null : 0;
+        $this->onlyTrashed = true;
+        return $this->update([$col => $val]);
+    }
+
+    public function forceDelete(): int
+    {
+        $this->assertWritable();
+        $this->withTrashed = true;
+        return $this->delete();
+    }
+
+    public function upsert(array $data, array $conflict, array $updateColumns): int
+    {
+        $this->assertWritable();
+        $pdo = $this->db->choosePdo('insert');
+        $driver = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
+        $cols = array_keys($data);
+        $placeholders = implode(',', array_fill(0, count($cols), '?'));
+        $conflictCols = implode(',', array_map(fn($c) => $this->db->qi($c, $pdo), $conflict));
+        $updateSets = [];
+        $params = array_values($data);
+        foreach ($updateColumns as $col) {
+            $updateSets[] = $this->db->qi($col, $pdo) . ' = EXCLUDED.' . $this->db->qi($col, $pdo);
+        }
+        $updateClause = implode(',', $updateSets);
+
+        if ($driver === 'pgsql') {
+            $sql = 'INSERT INTO ' . $this->compileTable($pdo) . ' (' . implode(',', array_map(fn($c) => $this->db->qi($c, $pdo), $cols)) . ') VALUES (' . $placeholders . ') ON CONFLICT (' . $conflictCols . ') DO UPDATE SET ' . $updateClause . ' RETURNING id';
+        } elseif ($driver === 'mysql') {
+            $sql = 'INSERT INTO ' . $this->compileTable($pdo) . ' (' . implode(',', array_map(fn($c) => $this->db->qi($c, $pdo), $cols)) . ') VALUES (' . $placeholders . ') ON DUPLICATE KEY UPDATE ' . $updateClause;
+        } elseif ($driver === 'sqlite') {
+            $sql = 'INSERT INTO ' . $this->compileTable($pdo) . ' (' . implode(',', array_map(fn($c) => $this->db->qi($c, $pdo), $cols)) . ') VALUES (' . $placeholders . ') ON CONFLICT (' . $conflictCols . ') DO UPDATE SET ' . $updateClause . ' RETURNING id';
+        } else {
+            $sql = 'INSERT INTO ' . $this->compileTable($pdo) . ' (' . implode(',', array_map(fn($c) => $this->db->qi($c, $pdo), $cols)) . ') VALUES (' . $placeholders . ')';
+            $params = array_values($data);
+        }
+
+        $ctx = ['type' => 'insert', 'table' => $this->table];
+        $runner = $this->dbRunner(function($ctx) use ($pdo, $sql, $params) {
+            if ($this->db->isTestMode()) {
+                $this->db->storeLast($sql, $params);
+                return 0;
+            }
+            $start = microtime(true);
+            $stmt = $this->dbExec($pdo, $sql, $params, $this->timeoutMs);
+            $ms = (microtime(true) - $start) * 1000;
+            $count = $stmt->rowCount();
+            $this->dbEmit($ctx, $ms, $count);
+            return $count;
+        });
+        return $runner($ctx);
+    }
+
+    public function getKeyset(?string $cursor, string $key): array
+    {
+        $pdo = $this->db->choosePdo('select');
+        if ($cursor) {
+            $decoded = json_decode(base64_decode($cursor), true);
+            if ($decoded && isset($decoded['last'])) {
+                $last = $decoded['last'];
+                $this->where($key, '>', $last);
+            }
+        }
+        $rows = $this->get();
+        $next = null;
+        if ($rows && count($rows) === ($this->limit ?? PHP_INT_MAX)) {
+            $last = end($rows)[$key] ?? null;
+            if ($last !== null) {
+                $next = base64_encode(json_encode(['last' => $last]));
+            }
+        }
+        return ['data' => $rows, 'next' => $next];
+    }
+
     public function chunk(int $size, callable $callback): void
     {
         if ($size <= 0) throw new \InvalidArgumentException('Chunk size must be positive');
@@ -832,13 +1211,12 @@ class Query
         $ctx = ['type' => 'select', 'table' => $this->table];
         $runner = $this->dbRunner(function($ctx) use ($pdo, $sql, $params) {
             if ($this->db->isTestMode()) {
-                $this->storeLast($sql, $params);
+                $this->db->storeLast($sql, $params);
                 return (function() { yield from []; })();
             }
             $start = microtime(true);
             $stmt = $this->dbExec($pdo, $sql, $params, $this->timeoutMs);
             $ms = (microtime(true) - $start) * 1000;
-            if ($this->db->logger) call_user_func($this->db->logger, $sql, $params, $ms);
             $count = 0;
             while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
                 $count++;
@@ -864,6 +1242,43 @@ class Query
     public function cast(string $expr): string
     {
         return 'CAST(' . $expr . ')';
+    }
+
+    public function jsonSet(string $col, array $updates): self
+    {
+        $pdo = $this->db->choosePdo('update');
+        $driver = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
+        $updatesSql = [];
+        $params = [];
+        foreach ($updates as $path => $val) {
+            if ($driver === 'mysql') {
+                $updatesSql[] = $this->db->qi($col, $pdo) . ' = JSON_SET(' . $this->db->qi($col, $pdo) . ', \'$.' . $path . '\', ?)';
+                $params[] = $val;
+            } elseif ($driver === 'pgsql') {
+                $updatesSql[] = $this->db->qi($col, $pdo) . ' = JSONB_SET(' . $this->db->qi($col, $pdo) . ', \'{' . str_replace('.', ',', $path) . '}\', ?)';
+                $params[] = json_encode($val);
+            } else {
+                throw new \RuntimeException('jsonSet not supported on ' . $driver);
+            }
+        }
+        $sql = 'UPDATE ' . $this->compileTable($pdo) . ' SET ' . implode(',', $updatesSql);
+        [$whereSql, $whereParams] = $this->compileWhere($pdo, true);
+        if ($whereSql) $sql .= ' WHERE ' . $whereSql;
+        $params = array_merge($params, $whereParams);
+        $ctx = ['type' => 'update', 'table' => $this->table];
+        $runner = $this->dbRunner(function($ctx) use ($pdo, $sql, $params) {
+            if ($this->db->isTestMode()) {
+                $this->db->storeLast($sql, $params);
+                return $this;
+            }
+            $start = microtime(true);
+            $stmt = $this->dbExec($pdo, $sql, $params, $this->timeoutMs);
+            $ms = (microtime(true) - $start) * 1000;
+            $count = $stmt->rowCount();
+            $this->dbEmit($ctx, $ms, $count);
+            return $this;
+        });
+        return $runner($ctx);
     }
 }
 
