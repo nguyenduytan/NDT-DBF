@@ -213,7 +213,7 @@ final class DBF
         $this->routing = $config['routing'] ?? 'auto';
     }
 
-    private function qi(string $identifier, PDO $pdo): string
+    public function qi(string $identifier, PDO $pdo): string
     {
         $driver = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
         if ($driver === 'sqlite') {
