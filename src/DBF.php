@@ -2,7 +2,7 @@
 /**
  * NDT DBF - Simple, Lightweight PHP Database Framework (Enterprise+)
  *
- * @version   0.4.3
+ * @version   0.4.4
  * @package   NDT DBF
  * @description Single-file, secure PHP Database Framework with PRO & Advanced++ features.
  * @author    Tony Nguyen
@@ -23,7 +23,8 @@
  * - NEW (v0.4.0): Row locking (forUpdate/skipLocked), chunk/stream for large datasets, JSON helpers (whereJson/jsonSet), cast DSL, Oracle support
  * - NEW (v0.4.1): Added JSON support for SQLite, fixed logger access, fixed avg return type
  * - NEW (v0.4.2): Fixed sum cast to int, improved upsert and scope handling, ensured soft delete compatibility
- * - NEW (v0.4.3): Fixed test failures for pluck, upsert, scope, and insert; ensured SQLite UNIQUE constraint handling
+ * - NEW (v0.4.3): Fixed test failures for pluck, upsert, scope, and insert; ensured SQLite constraint handling
+ * - NEW (v0.4.4): Fixed insertGet fallback, upsert UNIQUE constraint check, and scope precedence; improved warning handling
  *
  * Quickstart:
  *   require 'DBF.php';
@@ -263,6 +264,53 @@ final class DBF
     public function getLogger(): ?callable
     {
         return $this->logger;
+    }
+
+    public function hasUniqueConstraint(string $table, array $columns): bool
+    {
+        $pdo = $this->pdoWrite;
+        $driver = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
+        $fullTable = $this->prefix . $table;
+        try {
+            switch ($driver) {
+                case 'sqlite':
+                    $stmt = $pdo->query("PRAGMA index_list('$fullTable')");
+                    $indexes = $stmt->fetchAll(PDO::FETCH_ASSOC);
+                    foreach ($indexes as $index) {
+                        if ($index['unique']) {
+                            $stmt = $pdo->query("PRAGMA index_info('{$index['name']}')");
+                            $indexCols = array_column($stmt->fetchAll(), 'name');
+                            if (count(array_intersect($indexCols, $columns)) === count($columns)) {
+                                return true;
+                            }
+                        }
+                    }
+                    break;
+                case 'mysql':
+                    $stmt = $pdo->query("SHOW INDEXES FROM `$fullTable` WHERE Key_name != 'PRIMARY' AND Non_unique = 0");
+                    $indexes = $stmt->fetchAll(PDO::FETCH_ASSOC);
+                    $indexCols = array_column($indexes, 'Column_name');
+                    if (count(array_intersect($indexCols, $columns)) === count($columns)) {
+                        return true;
+                    }
+                    break;
+                case 'pgsql':
+                    $stmt = $pdo->prepare("SELECT indexdef FROM pg_indexes WHERE tablename = ? AND indexdef LIKE '%UNIQUE%'");
+                    $stmt->execute([$fullTable]);
+                    $indexes = $stmt->fetchAll(PDO::FETCH_COLUMN);
+                    foreach ($indexes as $index) {
+                        foreach ($columns as $col) {
+                            if (strpos($index, $col) !== false) {
+                                return true;
+                            }
+                        }
+                    }
+                    break;
+            }
+        } catch (Throwable $e) {
+            trigger_error("Failed to check UNIQUE constraint on $fullTable: {$e->getMessage()}", E_USER_WARNING);
+        }
+        return false;
     }
 
     public function execPreparedOn(PDO $pdo, string $sql, array $params, int $timeoutMs = 0): PDOStatement
@@ -569,7 +617,7 @@ class Query
     public function join(string $table, string $left, string $op, string $right, string $type = 'INNER'): self
     {
         $this->joins[] = [
-            'type' => $type,
+            'type' => 'INNER',
             'table' => $table,
             'left' => $left,
             'op' => $op,
@@ -1075,7 +1123,7 @@ class Query
                 $res = $stmt->fetch(PDO::FETCH_ASSOC);
             } else {
                 $id = (int)$pdo->lastInsertId();
-                $res = $this->db->table($this->table)->select($returning)->where('id', '=', $id)->first();
+                $res = $this->db->table($this->table)->select($returning)->withTrashed()->where('id', '=', $id)->first();
             }
             $this->dbEmit($ctx, $ms, 1);
             return $res ?: [];
@@ -1169,6 +1217,9 @@ class Query
         $this->assertWritable();
         $pdo = $this->db->choosePdo('insert');
         $driver = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
+        if (!$this->db->hasUniqueConstraint($this->table, $conflict)) {
+            throw new \RuntimeException("No UNIQUE constraint on columns: " . implode(',', $conflict));
+        }
         $cols = array_keys($data);
         $placeholders = implode(',', array_fill(0, count($cols), '?'));
         $conflictCols = implode(',', array_map(fn($c) => $this->db->qi($c, $pdo), $conflict));
