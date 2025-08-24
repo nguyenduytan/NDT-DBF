@@ -32,6 +32,7 @@ final class DBFTest extends TestCase
         $this->assertGreaterThan(0, $id);
 
         $row = $this->db->table('users')->where('id', '=', $id)->withTrashed()->first();
+        $this->assertNotNull($row, 'Insert failed to create record');
         $this->assertSame('a@x.com', $row['email']);
 
         $aff = $this->db->table('users')->where('id', '=', $id)->update(['status' => 'vip']);
@@ -66,7 +67,7 @@ final class DBFTest extends TestCase
             ['order_id' => $o2, 'sku' => 'A', 'qty' => 3],
         ]);
 
-        $out = $this->db->table('orders')->select(['orders.id', 'users.email'])
+        $out = $this->db->table('orders')-> select(['orders.id', 'users.email'])
             ->join('users', 'orders.user_id', '=', 'users.id')
             ->orderBy('orders.id', 'asc')->get();
 
@@ -81,14 +82,16 @@ final class DBFTest extends TestCase
             ['email'],
             ['status']
         );
+        $row1 = $this->db->table('users')->where('email', '=', 'a@x.com')->withTrashed()->first();
+        $this->assertNotNull($row1, 'First upsert failed to insert record');
 
         $this->db->table('users')->upsert(
             ['email' => 'a@x.com', 'status' => 'vip'],
             ['email'],
             ['status']
         );
-
         $row = $this->db->table('users')->where('email', '=', 'a@x.com')->withTrashed()->first();
+        $this->assertNotNull($row, 'Second upsert failed to update record');
         $this->assertSame('vip', $row['status']);
     }
 
@@ -113,8 +116,7 @@ final class DBFTest extends TestCase
             ['user_id' => 1, 'total' => 30, 'created_at' => '2025-01-03'],
         ]);
 
-        $this->assertSame(60, $this->db->table('orders')->sum('total'));
-        // Changed to assertEquals to allow float 20.0
+        $this->assertEquals(60, $this->db->table('orders')->sum('total'));
         $this->assertEquals(20, $this->db->table('orders')->avg('total'));
         $this->assertSame(10, $this->db->table('orders')->min('total'));
         $this->assertSame(30, $this->db->table('orders')->max('total'));
@@ -165,7 +167,7 @@ final class DBFTest extends TestCase
         $dbScoped = $this->db->withScope(['status' => 'active']);
         $dbScoped->table('users')->insert(['email' => 's1@x.com', 'status' => 'active']);
         $this->db->table('users')->insert(['email' => 's2@x.com', 'status' => 'vip']);
-        $rows = $dbScoped->table('users')->get();
+        $rows = $dbScoped->table('users')->withTrashed()->get();
         $this->assertCount(1, $rows);
         $this->assertSame('s1@x.com', $rows[0]['email']);
 

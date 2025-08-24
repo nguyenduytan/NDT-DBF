@@ -2,7 +2,7 @@
 /**
  * NDT DBF - Simple, Lightweight PHP Database Framework (Enterprise+)
  *
- * @version   0.4.1
+ * @version   0.4.2
  * @package   NDT DBF
  * @description Single-file, secure PHP Database Framework with PRO & Advanced++ features.
  * @author    Tony Nguyen
@@ -22,6 +22,7 @@
  * - Advanced++: Per-query timeout (MySQL/PG best-effort)
  * - NEW (v0.4.0): Row locking (forUpdate/skipLocked), chunk/stream for large datasets, JSON helpers (whereJson/jsonSet), cast DSL, Oracle support
  * - NEW (v0.4.1): Added JSON support for SQLite, fixed logger access, fixed avg return type
+ * - NEW (v0.4.2): Fixed sum cast to int, improved upsert and scope handling, ensured soft delete compatibility
  *
  * Quickstart:
  *   require 'DBF.php';
@@ -89,8 +90,7 @@ final class DBF
     public function __construct(string|array|null $configOrUri = null)
     {
         if ($configOrUri === null) {
-            $env = getenv('NDTAN_DBF_URL');
-            if (!$env) throw new \InvalidArgumentException('No configuration provided. Pass URI/array/PDO or set NDTAN_DBF_URL.');
+            $env = getenv('NDTAN_DBF_URL') ?: throw new \InvalidArgumentException('No configuration provided. Pass URI/array/PDO or set NDTAN_DBF_URL.');
             $configOrUri = $env;
         }
 
@@ -286,7 +286,7 @@ final class DBF
     {
         if ($this->routing === 'single') return $this->pdoWrite;
         if ($this->routing === 'manual') return $this->currentRoute === 'read' && $this->pdoRead ? $this->pdoRead : $this->pdoWrite;
-        return in_array($type, ['select', 'aggregate']) && $this->pdoRead ? $this->pdoRead : $this->pdoWrite;
+        return in_array($type, ['select', 'aggregate', 'raw']) && $this->pdoRead ? $this->pdoRead : $this->pdoWrite;
     }
 
     public function getColumns(string $table, ?PDO $pdo = null): array
@@ -859,7 +859,7 @@ class Query
         return $runner($ctx);
     }
 
-    public function sum(string $col): float
+    public function sum(string $col): mixed
     {
         $pdo = $this->db->choosePdo('aggregate');
         [$whereSql, $params] = $this->compileWhere($pdo, true, true);
@@ -869,14 +869,15 @@ class Query
         $runner = $this->dbRunner(function($ctx) use ($pdo, $sql, $params) {
             if ($this->db->isTestMode()) {
                 $this->db->storeLast($sql, $params);
-                return 0.0;
+                return 0;
             }
             $start = microtime(true);
             $stmt = $this->dbExec($pdo, $sql, $params, $this->timeoutMs);
             $ms = (microtime(true) - $start) * 1000;
             $res = $stmt->fetchColumn();
             $this->dbEmit($ctx, $ms, 1);
-            return $res === null ? 0.0 : (float)$res;
+            $result = $res === null ? 0 : $res;
+            return is_float($result) && floor($result) == $result ? (int)$result : (float)$result;
         });
         return $runner($ctx);
     }
@@ -1163,26 +1164,26 @@ class Query
             $updateSets[] = $this->db->qi($col, $pdo) . ' = EXCLUDED.' . $this->db->qi($col, $pdo);
         }
         $updateClause = implode(',', $updateSets);
+        [$whereSql, $whereParams] = $this->compileWhere($pdo, true, true);
+        $where = $whereSql ? ' WHERE ' . $whereSql : '';
 
-        if ($driver === 'pgsql') {
-            $sql = 'INSERT INTO ' . $this->compileTable($pdo) . ' (' . implode(',', array_map(fn($c) => $this->db->qi($c, $pdo), $cols)) . ') VALUES (' . $placeholders . ') ON CONFLICT (' . $conflictCols . ') DO UPDATE SET ' . $updateClause . ' RETURNING id';
+        if ($driver === 'pgsql' || $driver === 'sqlite') {
+            $sql = 'INSERT INTO ' . $this->compileTable($pdo) . ' (' . implode(',', array_map(fn($c) => $this->db->qi($c, $pdo), $cols)) . ') VALUES (' . $placeholders . ') ON CONFLICT (' . $conflictCols . ') DO UPDATE SET ' . $updateClause . $where;
         } elseif ($driver === 'mysql') {
-            $sql = 'INSERT INTO ' . $this->compileTable($pdo) . ' (' . implode(',', array_map(fn($c) => $this->db->qi($c, $pdo), $cols)) . ') VALUES (' . $placeholders . ') ON DUPLICATE KEY UPDATE ' . $updateClause;
-        } elseif ($driver === 'sqlite') {
-            $sql = 'INSERT INTO ' . $this->compileTable($pdo) . ' (' . implode(',', array_map(fn($c) => $this->db->qi($c, $pdo), $cols)) . ') VALUES (' . $placeholders . ') ON CONFLICT (' . $conflictCols . ') DO UPDATE SET ' . $updateClause . ' RETURNING id';
+            $sql = 'INSERT INTO ' . $this->compileTable($pdo) . ' (' . implode(',', array_map(fn($c) => $this->db->qi($c, $pdo), $cols)) . ') VALUES (' . $placeholders . ') ON DUPLICATE KEY UPDATE ' . $updateClause . $where;
         } else {
-            $sql = 'INSERT INTO ' . $this->compileTable($pdo) . ' (' . implode(',', array_map(fn($c) => $this->db->qi($c, $pdo), $cols)) . ') VALUES (' . $placeholders . ')';
+            $sql = 'INSERT INTO ' . $this->compileTable($pdo) . ' (' . implode(',', array_map(fn($c) => $this->db->qi($c, $pdo), $cols)) . ') VALUES (' . $placeholders . ')' . $where;
             $params = array_values($data);
         }
 
         $ctx = ['type' => 'insert', 'table' => $this->table];
-        $runner = $this->dbRunner(function($ctx) use ($pdo, $sql, $params) {
+        $runner = $this->dbRunner(function($ctx) use ($pdo, $sql, $params, $whereParams) {
             if ($this->db->isTestMode()) {
-                $this->db->storeLast($sql, $params);
+                $this->db->storeLast($sql, array_merge($params, $whereParams));
                 return 0;
             }
             $start = microtime(true);
-            $stmt = $this->dbExec($pdo, $sql, $params, $this->timeoutMs);
+            $stmt = $this->dbExec($pdo, $sql, array_merge($params, $whereParams), $this->timeoutMs);
             $ms = (microtime(true) - $start) * 1000;
             $count = $stmt->rowCount();
             $this->dbEmit($ctx, $ms, $count);
