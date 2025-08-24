@@ -39,5 +39,15 @@ jobs:
       - name: Dump autoload (optimize)
         run: composer dump-autoload -o
 
-      - name: Run PHPUnit
-        run: vendor/bin/phpunit --display-deprecations --colors=always --verbose
+      - name: Run PHPUnit (compatible 10/11)
+        shell: bash
+        run: |
+          set -e
+          VER="$(vendor/bin/phpunit --version | awk '{print $2}')"
+          MAJOR="${VER%%.*}"
+          echo "Detected PHPUnit $VER (major=$MAJOR)"
+          if [ "$MAJOR" -ge 11 ]; then
+            vendor/bin/phpunit --display-deprecations --colors=always --verbose
+          else
+            vendor/bin/phpunit --display-deprecations --colors=always -v
+          fi
