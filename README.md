@@ -14,17 +14,6 @@ Secure by default, compact API, works as <em>one file</em> or via <strong>Compos
   <a href="https://www.paypal.com/paypalme/copbeo">Donate</a>
 </p>
 
-<p align="center">
-  <a href="https://github.com/nguyenduytan/NDT-DBF/actions">
-    <img alt="build" src="https://img.shields.io/github/actions/workflow/status/nguyenduytan/NDT-DBF/ci.yml?label=build&logo=github">
-  </a>
-  <a href="https://packagist.org/packages/ndtan/dbf">
-    <img alt="stable" src="https://img.shields.io/packagist/v/ndtan/dbf.svg?label=stable">
-  </a>
-  <img alt="downloads" src="https://img.shields.io/packagist/dm/ndtan/dbf.svg?label=downloads">
-  <img alt="php" src="https://img.shields.io/badge/php-%3E%3D%208.1-777bb3">
-  <img alt="license" src="https://img.shields.io/badge/license-MIT-brightgreen">
-</p>
 <p align="center" dir="auto">
     <a href="https://github.com/nguyenduytan/NDT-DBF/actions"><img alt="Build Status" src="https://github.com/nguyenduytan/NDT-DBF/actions/workflows/ci.yml/badge.svg" style="max-width: 100%;"></a>
     <a href="https://packagist.org/packages/ndtan/dbf" rel="nofollow"><img alt="Total Downloads" src="https://camo.githubusercontent.com/524236374e9eb92f2857e742171e1b8136777ef08041555739317a3a553f25ad/68747470733a2f2f706f7365722e707567782e6f72672f63617466616e2f6d65646f6f2f646f776e6c6f616473" data-canonical-src="hhttps://poser.pugx.org/ndtan/dbf/downloads" style="max-width: 100%;"></a>
