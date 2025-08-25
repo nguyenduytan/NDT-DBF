@@ -16,15 +16,19 @@ Secure by default, compact API, works as <em>one file</em> or via <strong>Compos
 
 <p align="center">
   <a href="https://github.com/nguyenduytan/NDT-DBF/actions">
-    <img alt="build" src="https://img.shields.io/github/actions/workflow/status/nguyenduytan/NDT-DBF/ci.yml?label=build&logo=github">
+    <img alt="build" src="https://github.com/nguyenduytan/NDT-DBF/actions/workflows/ci.yml/badge.svg">
+  </a><!--
+  --><a href="https://packagist.org/packages/ndtan/dbf">
+    <img alt="downloads" src="https://poser.pugx.org/ndtan/dbf/downloads">
+  </a><!--
+  --><a href="https://packagist.org/packages/ndtan/dbf">
+    <img alt="stable" src="https://poser.pugx.org/ndtan/dbf/v/stable">
+  </a><!--
+  --><a href="https://packagist.org/packages/ndtan/dbf">
+    <img alt="license" src="https://poser.pugx.org/ndtan/dbf/license">
   </a>
-  <a href="https://packagist.org/packages/ndtan/dbf">
-    <img alt="stable" src="https://img.shields.io/packagist/v/ndtan/dbf.svg?label=stable">
-  </a>
-  <img alt="downloads" src="https://img.shields.io/packagist/dm/ndtan/dbf.svg?label=downloads">
-  <img alt="php" src="https://img.shields.io/badge/php-%3E%3D%208.1-777bb3">
-  <img alt="license" src="https://img.shields.io/badge/license-MIT-brightgreen">
 </p>
+
 
 
 
