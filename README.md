@@ -16,9 +16,9 @@ Secure by default, compact API, works as <em>one file</em> or via <strong>Compos
 
 <p align="center" dir="auto">
     <a href="https://github.com/nguyenduytan/NDT-DBF/actions"><img alt="Build Status" src="https://github.com/nguyenduytan/NDT-DBF/actions/workflows/ci.yml/badge.svg" style="max-width: 100%;"></a>
-    <a href="https://packagist.org/packages/ndtan/dbf" rel="nofollow"><img alt="Total Downloads" src="https://camo.githubusercontent.com/524236374e9eb92f2857e742171e1b8136777ef08041555739317a3a553f25ad/68747470733a2f2f706f7365722e707567782e6f72672f63617466616e2f6d65646f6f2f646f776e6c6f616473" data-canonical-src="hhttps://poser.pugx.org/ndtan/dbf/downloads" style="max-width: 100%;"></a>
-    <a href="https://packagist.org/packages/ndtan/dbf" rel="nofollow"><img alt="Latest Stable Version" src="https://camo.githubusercontent.com/2d2894222800260b3835e9210b29e9291d59f5776a1a17ed4e35f8e40ec6800f/68747470733a2f2f706f7365722e707567782e6f72672f63617466616e2f6d65646f6f2f762f737461626c65" data-canonical-src="https://poser.pugx.org/ndtan/dbf/v/stable" style="max-width: 100%;"></a>
-    <a href="https://packagist.org/packages/ndtan/dbf" rel="nofollow"><img alt="License" src="https://camo.githubusercontent.com/e3670c6b08206f0dd7c17934f220365e71d972e98feddeb0becebc1f21ad5bda/68747470733a2f2f706f7365722e707567782e6f72672f63617466616e2f6d65646f6f2f6c6963656e7365" data-canonical-src="hhttps://poser.pugx.org/ndtan/dbf/license" style="max-width: 100%;"></a>
+    <a href="https://packagist.org/packages/ndtan/dbf" rel="nofollow"><img alt="Total Downloads" src="https://img.shields.io/packagist/dm/ndtan/dbf.svg?label=downloads" data-canonical-src="hhttps://poser.pugx.org/ndtan/dbf/downloads" style="max-width: 100%;"></a>
+    <a href="https://packagist.org/packages/ndtan/dbf" rel="nofollow"><img alt="Latest Stable Version" src="https://img.shields.io/packagist/v/ndtan/dbf.svg?label=stable" data-canonical-src="https://poser.pugx.org/ndtan/dbf/v/stable" style="max-width: 100%;"></a>
+    <a href="https://packagist.org/packages/ndtan/dbf" rel="nofollow"><img alt="License" src="https://img.shields.io/badge/license-MIT-brightgreen" data-canonical-src="hhttps://poser.pugx.org/ndtan/dbf/license" style="max-width: 100%;"></a>
 </p>
 
 ---
