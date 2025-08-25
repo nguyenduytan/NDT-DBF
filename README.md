@@ -14,32 +14,10 @@ Secure by default, compact API, works as <em>one file</em> or via <strong>Compos
   <a href="https://www.paypal.com/paypalme/copbeo">Donate</a>
 </p>
 
-<p align="center">
-  <a href="https://github.com/nguyenduytan/NDT-DBF/actions"
-     style="display:inline-block;line-height:0;border:0;text-decoration:none">
-    <img alt="CI"
-         src="https://github.com/nguyenduytan/NDT-DBF/actions/workflows/ci.yml/badge.svg"
-         style="vertical-align:middle;max-width:100%;">
-  </a><!--
-  --><a href="https://packagist.org/packages/ndtan/dbf"
-     style="display:inline-block;line-height:0;border:0;text-decoration:none">
-    <img alt="downloads"
-         src="https://poser.pugx.org/ndtan/dbf/downloads"
-         style="vertical-align:middle;max-width:100%;">
-  </a><!--
-  --><a href="https://packagist.org/packages/ndtan/dbf"
-     style="display:inline-block;line-height:0;border:0;text-decoration:none">
-    <img alt="stable"
-         src="https://poser.pugx.org/ndtan/dbf/v/stable"
-         style="vertical-align:middle;max-width:100%;">
-  </a><!--
-  --><a href="https://packagist.org/packages/ndtan/dbf"
-     style="display:inline-block;line-height:0;border:0;text-decoration:none">
-    <img alt="license"
-         src="https://poser.pugx.org/ndtan/dbf/license"
-         style="vertical-align:middle;max-width:100%;">
-  </a>
-</p>
+<p align="center"><a href="https://github.com/nguyenduytan/NDT-DBF/actions"><img alt="CI" src="https://github.com/nguyenduytan/NDT-DBF/actions/workflows/ci.yml/badge.svg" style="vertical-align:middle;max-width:100%"></a><!--
+--><a href="https://packagist.org/packages/ndtan/dbf"><img alt="downloads" src="https://poser.pugx.org/ndtan/dbf/downloads" style="vertical-align:middle;max-width:100%"></a><!--
+--><a href="https://packagist.org/packages/ndtan/dbf"><img alt="stable" src="https://poser.pugx.org/ndtan/dbf/v/stable" style="vertical-align:middle;max-width:100%"></a><!--
+--><a href="https://packagist.org/packages/ndtan/dbf"><img alt="license" src="https://poser.pugx.org/ndtan/dbf/license" style="vertical-align:middle;max-width:100%"></a></p>
 
 
 
