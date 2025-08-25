@@ -16,7 +16,7 @@ Secure by default, compact API, works as <em>one file</em> or via <strong>Compos
 
 <p align="center" dir="auto">
     <a href="https://github.com/nguyenduytan/NDT-DBF/actions"><img alt="Build Status" src="https://github.com/nguyenduytan/NDT-DBF/actions/workflows/ci.yml/badge.svg" style="max-width: 100%;"></a>
-    <a href="https://packagist.org/packages/ndtan/dbf" rel="nofollow"><img alt="Total Downloads" src="https://img.shields.io/packagist/dt/ndtan/dbf.svg?label=downloads" data-canonical-src="https://img.shields.io/packagist/dt/ndtan/dbf.svg?label=downloads" style="max-width: 100%;"></a>
+    <a href="https://packagist.org/packages/ndtan/dbf" rel="nofollow"><img alt="Total Downloads" src="https://poser.pugx.org/ndtan/dbf/downloads" data-canonical-src="https://poser.pugx.org/ndtan/dbf/downloads" style="max-width: 100%;"></a>
     <a href="https://packagist.org/packages/ndtan/dbf" rel="nofollow"><img alt="Latest Stable Version" src="https://img.shields.io/packagist/v/ndtan/dbf.svg?label=stable" data-canonical-src="https://poser.pugx.org/ndtan/dbf/v/stable" style="max-width: 100%;"></a>
     <a href="https://packagist.org/packages/ndtan/dbf" rel="nofollow"><img alt="License" src="https://img.shields.io/badge/license-MIT-brightgreen" data-canonical-src="hhttps://poser.pugx.org/ndtan/dbf/license" style="max-width: 100%;"></a>
 </p>
