@@ -1,7 +1,7 @@
 <p align="center">
   <a href="https://ndtan.net" target="_blank" rel="noopener">
     <picture>
-      <img alt="NDT DBF logo" src="./assets/brand/logo.png" width="100%">
+      <img alt="NDT DBF logo" src="./assets/brand/logo.png" width="520">
     </picture>
   </a>
 </p>
