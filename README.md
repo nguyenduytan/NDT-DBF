@@ -5,8 +5,8 @@
     </picture>
   </a>
 </p>
-<p align="center"><strong>NDT DBF</strong> — A single‑file PHP Database Framework (PRO · Enterprise+).<br>
-Secure by default, compact API, works as <em>one file</em> or via <strong>Composer/PSR‑4</strong>.</p>
+<p align="center"><strong>NDT DBF 0.2.0</strong> — A single-file PHP SQL framework.<br>
+Secure by default, compact API, and runtime contained in <code>DBF.php</code>.</p>
 
 <p align="center">
   <a href="https://ndtan.net">Website & Docs</a> ·
@@ -66,9 +66,9 @@ Secure by default, compact API, works as <em>one file</em> or via <strong>Compos
 - ⚡️ **Lightweight & single file**: no third-party deps (PDO only)
 - 🔐 **Secure by default**: prepared statements, per-driver identifier quoting, IN-list guard
 - 🧱 **Query Builder**: `select / where / orWhere / whereIn / between / null / join / group / having / order / limit / offset`
-- 🧾 **Full CRUD**: `insert`, `insertMany`, `insertGet` (PG/SQLite `RETURNING`)
-- 🔁 **Cross-dialect Upsert**: MySQL (`ON DUP KEY`), PG/SQLite (`ON CONFLICT`), safe fallback
-- 💳 **Transactions**: exponential backoff + jitter on deadlock
+- 🧾 **CRUD**: `insert`, `insertMany`, `insertGet`, `update`, `delete`, soft delete
+- 🔁 **Upsert**: MySQL, PostgreSQL and SQLite native conflict syntax
+- 💳 **Transactions**: nested savepoints, write-connection pinning, deadlock retry
 - 🚦 **Readonly/Maintenance mode**: block DML when system is frozen
 - 🪶 **Soft Delete**: `withTrashed() / onlyTrashed() / restore() / forceDelete()`
 - 🧭 **Master/Replica routing**: auto/manual read-write split
@@ -76,9 +76,9 @@ Secure by default, compact API, works as <em>one file</em> or via <strong>Compos
 - 🧩 **Middleware & Policy hooks** + **Logger** & **Metrics hook**
 - 📊 **Aggregates & Sugar**: `sum()`, `avg()`, `min()`, `max()`, `pluck()`
 - 🧪 **Test Mode**: build SQL **without executing** (great for unit tests/previews)
-- 📚 **Keyset pagination** helper
+- 📚 **Keyset pagination** with ASC/DESC cursor and streaming/chunk helpers
 
-Supports **MySQL/MariaDB**, **PostgreSQL**, **SQLite**, **SQL Server**.
+Supports **MySQL/MariaDB**, **PostgreSQL**, **SQLite**, **SQL Server** and **Oracle** for connection/query features where supported by the driver.
 
 ---
 
@@ -108,7 +108,7 @@ $db = new \ndtan\DBF([
   'username' => 'root',
   'password' => 'secret',
   'charset'  => 'utf8mb4',
-  'logging'  => false,
+  'options'  => [PDO::ATTR_TIMEOUT => 5],
 ]);
 ```
 
@@ -148,11 +148,9 @@ $db = new \ndtan\DBF([
   'username' => 'root',
   'password' => 'secret',
   'charset'  => 'utf8mb4',
-  'collation'=> 'utf8mb4_general_ci',
   'prefix'   => 'app_',
-  'logging'  => true,
   'error'    => PDO::ERRMODE_EXCEPTION,
-  'option'   => [PDO::ATTR_CASE => PDO::CASE_NATURAL],
+  'options'  => [PDO::ATTR_CASE => PDO::CASE_NATURAL],
 
   // Enterprise options
   'readonly' => false,
@@ -160,7 +158,6 @@ $db = new \ndtan\DBF([
     'soft_delete'   => ['enabled'=>true,'column'=>'deleted_at','mode'=>'timestamp'],
     'max_in_params' => 1000
   ],
-  'command'  => ['SET SQL_MODE=ANSI_QUOTES'],
 ]);
 ```
 
@@ -263,7 +260,7 @@ $aff = $db->table('users')->where('id','=', $id)->delete();
 ### Upsert
 
 ```php
-// MySQL: ON DUPLICATE KEY; PG/SQLite: ON CONFLICT; others: safe fallback (tx)
+// MySQL: ON DUPLICATE KEY; PostgreSQL/SQLite: ON CONFLICT
 $db->table('users')->upsert(
   ['email'=>'a@ndtan.net','status'=>'vip'],
   conflict: ['email'],
@@ -366,13 +363,13 @@ print_r($db->queryParams());
 ## Raw SQL
 
 ```php
-// Positional
+// SELECT: returns array<int,array<string,mixed>>
 $rows = $db->raw('SELECT * FROM users WHERE email LIKE ?', ['%ndtan.net']);
 
 // Named
 $rows = $db->raw('SELECT * FROM users WHERE email = :e', ['e'=>'a@ndtan.net']);
 
-// DML
+// DML/DDL: returns affected rows (int)
 $aff  = $db->raw('UPDATE users SET status=? WHERE id=?', ['vip', 10]);
 ```
 
@@ -383,7 +380,7 @@ $aff  = $db->raw('UPDATE users SET status=? WHERE id=?', ['vip', 10]);
 - **Prepared statements** for all user inputs
 - **Identifier quoting** per driver to prevent injection via table/column names
 - **IN-list guard**: limit `whereIn` items (default 1000)
-- **Readonly mode** to block unintended writes
+- **Readonly mode** to block builder and raw write operations
 - **Scope/Policy** hooks for tenant/RBAC-like checks
 
 > DBF is “secure by default”, but you should still harden your DB (users/roles, TLS, firewall, backups, monitoring).
@@ -397,7 +394,7 @@ $db->setLogger(function(string $sql, array $params, float $ms) {
   error_log(sprintf('[SQL %.2fms] %s | %s', $ms, $sql, json_encode($params)));
 });
 
-$info = $db->info(); // driver, routing, readonly, soft_delete, test_mode...
+$info = $db->info(); // includes version, driver, routing and feature state
 ```
 
 ---
