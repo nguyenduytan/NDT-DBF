@@ -255,4 +255,49 @@ final class DBFTest extends TestCase
         $this->assertCount(1, $result['data']);
         $this->assertNull($result['next']);
     }
+
+    public function testVersionAndQualifiedIdentifiers(): void
+    {
+        $this->assertSame('0.2.0', DBF::VERSION);
+        $this->db->raw('CREATE TABLE profiles (id INTEGER PRIMARY KEY, user_id INTEGER, name TEXT)');
+        $this->db->table('users')->insert(['id' => 1, 'email' => 'a@ndtan.net']);
+        $this->db->table('profiles')->insert(['id' => 1, 'user_id' => 1, 'name' => 'Tony']);
+
+        $row = $this->db->table('users')
+            ->select(['users.email AS address', 'profiles.name'])
+            ->join('profiles', 'users.id', '=', 'profiles.user_id')
+            ->where('users.id', '=', 1)
+            ->first();
+
+        $this->assertSame('a@ndtan.net', $row['address']);
+        $this->assertSame('Tony', $row['name']);
+    }
+
+    public function testValidationAndGroupedOrScope(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->db->table('users')->where('id', 'OR 1=1', 1)->get();
+    }
+
+    public function testRawDmlReturnsAffectedRowsAndReadonlyBlocksIt(): void
+    {
+        $this->db->table('users')->insert(['email' => 'raw@ndtan.net', 'status' => 'active']);
+        $affected = $this->db->raw('UPDATE users SET status=? WHERE email=?', ['vip', 'raw@ndtan.net']);
+        $this->assertSame(1, $affected);
+
+        $this->db->setReadonly(true);
+        $this->expectException(\RuntimeException::class);
+        $this->db->raw('UPDATE users SET status=? WHERE email=?', ['blocked', 'raw@ndtan.net']);
+    }
+
+    public function testTestModeStoresCompiledQueryWithoutExecuting(): void
+    {
+        $this->db->setTestMode(true);
+        $this->assertSame([], $this->db->table('users')
+            ->where('status', '=', 'active')
+            ->orWhere('email', '=', 'a@ndtan.net')
+            ->get());
+        $this->assertStringContainsString('"status" = ?', $this->db->queryString());
+        $this->assertSame(['active', 'a@ndtan.net'], $this->db->queryParams());
+    }
 }

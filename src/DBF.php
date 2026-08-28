@@ -2,7 +2,7 @@
 /**
  * NDT DBF - Simple, Lightweight PHP Database Framework (Enterprise+)
  *
- * @version   0.0.1
+ * @version   0.2.0
  * @package   NDT DBF
  * @description Single-file, secure PHP Database Framework with PRO & Advanced++ features.
  * @author    Tony Nguyen
@@ -23,6 +23,7 @@ use Throwable;
 
 final class DBF
 {
+    public const VERSION = '0.2.0';
     private PDO $pdoWrite;
     private ?PDO $pdoRead = null;
     private string $driverWrite;
@@ -59,6 +60,11 @@ final class DBF
 
     /** @var array Statement cache */
     private array $stmtCache = [];
+
+    /** @var int Current write transaction nesting depth. */
+    private int $transactionDepth = 0;
+    private ?PDO $transactionPdo = null;
+    private int $savepointCounter = 0;
 
     /** @var array Soft delete configuration */
     private array $softDelete = [
@@ -111,11 +117,14 @@ final class DBF
     {
         $parsed = parse_url($uri);
         $driver = $parsed['scheme'] ?? 'mysql';
-        $user = $parsed['user'] ?? '';
-        $pass = $parsed['pass'] ?? '';
+        $user = isset($parsed['user']) ? rawurldecode($parsed['user']) : '';
+        $pass = isset($parsed['pass']) ? rawurldecode($parsed['pass']) : '';
         $host = $parsed['host'] ?? 'localhost';
         $port = $parsed['port'] ?? ($driver === 'pgsql' ? 5432 : 3306);
-        $db = ltrim($parsed['path'] ?? '/app', '/');
+        $db = $parsed['path'] ?? '/app';
+        if ($driver !== 'sqlite') $db = ltrim($db, '/');
+        if ($driver === 'sqlite' && $db === '/:memory:') $db = ':memory:';
+        if ($driver === 'sqlite' && $db === '') $db = ':memory:';
         $query = [];
         parse_str($parsed['query'] ?? '', $query);
         $charset = $query['charset'] ?? 'utf8mb4';
@@ -152,14 +161,30 @@ final class DBF
         }
     }
 
-    private function connectFromArray(array $config): array
+    private function connectFromArray(array|string|PDO $config): array
     {
+        if ($config instanceof PDO) {
+            $config->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+            return [$config, (string)$config->getAttribute(PDO::ATTR_DRIVER_NAME)];
+        }
+        if (is_string($config)) return $this->connectFromUri($config);
+
         $driver = $config['type'] ?? 'mysql';
         $attrs = [
-            PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+            PDO::ATTR_ERRMODE => $config['error'] ?? PDO::ERRMODE_EXCEPTION,
             PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
-            PDO::ATTR_EMULATE_PREPARES => false,
+            PDO::ATTR_EMULATE_PREPARES => $config['emulate_prepares'] ?? false,
         ];
+        if (isset($config['options']) && is_array($config['options'])) {
+            $attrs = $config['options'] + $attrs;
+        } elseif (isset($config['option']) && is_array($config['option'])) {
+            $attrs = $config['option'] + $attrs;
+        }
+
+        if (isset($config['pdo']) && $config['pdo'] instanceof PDO) {
+            $config['pdo']->setAttribute(PDO::ATTR_ERRMODE, $attrs[PDO::ATTR_ERRMODE]);
+            return [$config['pdo'], (string)$config['pdo']->getAttribute(PDO::ATTR_DRIVER_NAME)];
+        }
 
         switch ($driver) {
             case 'mysql':
@@ -214,26 +239,41 @@ final class DBF
         if (isset($config['read'])) {
             [$this->pdoRead, $this->driverRead] = $this->connectFromArray($config['read']);
         }
+        if (!isset($this->pdoWrite)) {
+            if ($this->pdoRead) {
+                $this->pdoWrite = $this->pdoRead;
+                $this->driverWrite = $this->driverRead;
+            } else {
+                throw new \InvalidArgumentException('A write or read connection is required.');
+            }
+        }
         $this->routing = $config['routing'] ?? 'auto';
+        if (!in_array($this->routing, ['single', 'auto', 'manual'], true)) {
+            throw new \InvalidArgumentException('Invalid routing mode.');
+        }
     }
 
     public function qi(string $identifier, PDO $pdo): string
     {
-        $driver = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
-        if ($driver === 'sqlite') {
-            // SQLite uses double quotes for identifiers
-            return '"' . str_replace('"', '""', $identifier) . '"';
-        } elseif ($driver === 'mysql') {
-            // MySQL uses backticks
-            return '`' . str_replace('`', '``', $identifier) . '`';
-        } elseif ($driver === 'pgsql') {
-            // PostgreSQL uses double quotes
-            return '"' . str_replace('"', '""', $identifier) . '"';
-        } elseif ($driver === 'sqlsrv' || $driver === 'oracle') {
-            // SQL Server and Oracle use unquoted or specific handling
-            return $identifier;
+        $identifier = trim($identifier);
+        if ($identifier === '*') return '*';
+        if ($identifier === '' || str_contains($identifier, "\0")) {
+            throw new \InvalidArgumentException('Invalid SQL identifier.');
         }
-        return $identifier;
+        $driver = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
+        $quote = match ($driver) {
+            'mysql' => ['`', '`'],
+            'sqlsrv' => ['[', ']'],
+            default => ['"', '"'],
+        };
+        $parts = explode('.', $identifier);
+        foreach ($parts as $part) {
+            if ($part === '*' && count($parts) > 1) continue;
+            if (!preg_match('/^[A-Za-z_][A-Za-z0-9_$]*$|^\d+$/', $part)) {
+                throw new \InvalidArgumentException("Invalid SQL identifier segment: {$part}");
+            }
+        }
+        return implode('.', array_map(fn($part) => $part === '*' ? '*' : $quote[0] . $part . $quote[1], $parts));
     }
 
     public function getPrefix(): string
@@ -263,6 +303,9 @@ final class DBF
 
     public function hasUniqueConstraint(string $table, array $columns): bool
     {
+        if (!preg_match('/^[A-Za-z_][A-Za-z0-9_$]*(?:\.[A-Za-z_][A-Za-z0-9_$]*)?$/', $table)) {
+            throw new \InvalidArgumentException('Invalid table name.');
+        }
         $pdo = $this->pdoWrite;
         $driver = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
         $fullTable = $this->prefix . $table;
@@ -320,13 +363,24 @@ final class DBF
             if ($driver === 'pgsql') @$pdo->exec("SET LOCAL statement_timeout = {$timeoutMs}"); // Suppress warning
             if ($driver === 'sqlite') @$pdo->exec("PRAGMA busy_timeout = {$timeoutMs}"); // Suppress warning
         }
-        if (isset($this->stmtCache[$sql])) {
-            $stmt = $this->stmtCache[$sql];
-            $stmt->execute($params);
+        $cacheKey = spl_object_id($pdo) . ':' . $sql;
+        if (isset($this->stmtCache[$cacheKey])) {
+            $stmt = $this->stmtCache[$cacheKey];
+            try {
+                $stmt->execute($params);
+            } catch (Throwable) {
+                unset($this->stmtCache[$cacheKey]);
+                $stmt = $pdo->prepare($sql);
+                $stmt->execute($params);
+                $this->stmtCache[$cacheKey] = $stmt;
+            }
         } else {
             $stmt = $pdo->prepare($sql);
             $stmt->execute($params);
-            $this->stmtCache[$sql] = $stmt;
+            // Keep the cache bounded; SQL generated from user-selected columns
+            // must not be allowed to grow this array without limit.
+            if (count($this->stmtCache) >= 256) array_shift($this->stmtCache);
+            $this->stmtCache[$cacheKey] = $stmt;
         }
         return $stmt;
     }
@@ -338,15 +392,19 @@ final class DBF
 
     public function choosePdo(string $type): PDO
     {
+        if ($this->transactionPdo) return $this->transactionPdo;
         if ($this->routing === 'single') return $this->pdoWrite;
         if ($this->routing === 'manual') return $this->currentRoute === 'read' && $this->pdoRead ? $this->pdoRead : $this->pdoWrite;
-        return in_array($type, ['select', 'aggregate', 'raw']) && $this->pdoRead ? $this->pdoRead : $this->pdoWrite;
+        return in_array($type, ['select', 'aggregate', 'raw_read'], true) && $this->pdoRead ? $this->pdoRead : $this->pdoWrite;
     }
 
     public function getColumns(string $table, ?PDO $pdo = null): array
     {
         $pdo ??= $this->pdoWrite;
-        $key = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME) . ':' . $this->prefix . $table;
+        if (!preg_match('/^[A-Za-z_][A-Za-z0-9_$]*(?:\.[A-Za-z_][A-Za-z0-9_$]*)?$/', $table)) {
+            throw new \InvalidArgumentException('Invalid table name.');
+        }
+        $key = spl_object_id($pdo) . ':' . $pdo->getAttribute(PDO::ATTR_DRIVER_NAME) . ':' . $this->prefix . $table;
         if (isset($this->schemaCache[$key])) return $this->schemaCache[$key];
         $driver = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
         $fullTable = $this->prefix . $table;
@@ -392,14 +450,37 @@ final class DBF
 
     public function tx(callable $fn, int $attempts = 3): mixed
     {
+        if ($attempts < 1) throw new \InvalidArgumentException('Transaction attempts must be positive.');
+        if ($this->transactionDepth > 0) {
+            $savepoint = 'ndtan_sp_' . (++$this->savepointCounter);
+            $this->pdoWrite->exec('SAVEPOINT ' . $savepoint);
+            ++$this->transactionDepth;
+            try {
+                $result = $fn($this);
+                $this->pdoWrite->exec('RELEASE SAVEPOINT ' . $savepoint);
+                --$this->transactionDepth;
+                return $result;
+            } catch (Throwable $e) {
+                $this->pdoWrite->exec('ROLLBACK TO SAVEPOINT ' . $savepoint);
+                $this->pdoWrite->exec('RELEASE SAVEPOINT ' . $savepoint);
+                --$this->transactionDepth;
+                throw $e;
+            }
+        }
         for ($i = 1; $i <= $attempts; $i++) {
             try {
                 $this->pdoWrite->beginTransaction();
+                $this->transactionPdo = $this->pdoWrite;
+                $this->transactionDepth = 1;
                 $res = $fn($this);
                 $this->pdoWrite->commit();
+                $this->transactionDepth = 0;
+                $this->transactionPdo = null;
                 return $res;
             } catch (Throwable $e) {
-                $this->pdoWrite->rollBack();
+                if ($this->pdoWrite->inTransaction()) $this->pdoWrite->rollBack();
+                $this->transactionDepth = 0;
+                $this->transactionPdo = null;
                 if ($i === $attempts || !in_array($e->getCode(), [40001, '40001', '1213'])) throw $e;
                 usleep((2 ** $i) * 100000 + mt_rand(0, 100000));
             }
@@ -410,7 +491,10 @@ final class DBF
     public function using(?string $route): self
     {
         if ($this->routing !== 'manual') throw new \RuntimeException('Using only for manual routing');
-        $this->currentRoute = $route ?? 'write';
+        $route = $route ?? 'write';
+        if (!in_array($route, ['write', 'read'], true)) throw new \InvalidArgumentException('Route must be write or read.');
+        $this->currentRoute = $route;
+        if ($this->currentRoute === 'read' && !$this->pdoRead) throw new \RuntimeException('Read connection is not configured.');
         return $this;
     }
 
@@ -479,6 +563,8 @@ final class DBF
     {
         return [
             'driver' => $this->driverWrite,
+            'driver_read' => $this->driverRead,
+            'version' => self::VERSION,
             'routing' => $this->routing,
             'readonly' => $this->readonly,
             'test_mode' => $this->testMode,
@@ -491,22 +577,30 @@ final class DBF
         return new Query($this, $name);
     }
 
-    public function raw(string $sql, array $params = []): array
+    public function raw(string $sql, array $params = []): array|int
     {
-        $pdo = $this->choosePdo('raw');
-        $ctx = ['type' => 'raw', 'sql' => $sql];
+        $verb = strtoupper(strtok(ltrim($sql), " \t\r\n") ?: '');
+        $isRead = in_array($verb, ['SELECT', 'WITH', 'SHOW', 'DESCRIBE', 'DESC', 'EXPLAIN', 'PRAGMA'], true);
+        if (!$isRead && $this->readonly) throw new \RuntimeException('Readonly mode: raw write operation blocked.');
+        $pdo = $this->choosePdo($isRead ? 'raw_read' : 'raw');
+        $ctx = ['type' => $isRead ? 'select' : 'statement', 'sql' => $sql];
         $runner = $this->dbBuildRunner(function($ctx) use ($pdo, $sql, $params) {
             if ($this->isTestMode()) {
                 $this->storeLast($sql, $params);
-                return [];
+                return ($ctx['type'] ?? '') === 'select' ? [] : 0;
             }
             $start = microtime(true);
             $stmt = $this->execPreparedOn($pdo, $sql, $params);
             $ms = (microtime(true) - $start) * 1000;
             if ($this->getLogger()) call_user_func($this->getLogger(), $sql, $params, $ms);
-            $res = $stmt->fetchAll();
-            $this->emitMetrics($ctx, $ms, count($res));
-            return $res;
+            if (($ctx['type'] ?? '') === 'select') {
+                $res = $stmt->fetchAll();
+                $this->emitMetrics($ctx, $ms, count($res));
+                return $res;
+            }
+            $count = $stmt->rowCount();
+            $this->emitMetrics($ctx, $ms, $count);
+            return $count;
         });
         return $runner($ctx);
     }
@@ -567,6 +661,10 @@ class Query
 
     public function where(string $col, string $op, mixed $val, bool $or = false): self
     {
+        $op = $this->normalizeOperator($op);
+        if ($val === null && in_array($op, ['=', '!=', '<>'], true)) {
+            return $this->whereNull($col, $op === '!=', $or);
+        }
         $this->wheres[] = [
             'type' => 'basic',
             'bool' => $or ? 'OR' : 'AND',
@@ -619,6 +717,11 @@ class Query
 
     public function join(string $table, string $left, string $op, string $right, string $type = 'INNER'): self
     {
+        $type = strtoupper(trim($type));
+        if (!in_array($type, ['INNER', 'LEFT', 'RIGHT', 'FULL', 'CROSS'], true)) {
+            throw new \InvalidArgumentException('Unsupported join type.');
+        }
+        $op = $this->normalizeOperator($op);
         $this->joins[] = [
             'type' => $type,
             'table' => $table,
@@ -647,6 +750,7 @@ class Query
 
     public function having(string $expr, string $op, mixed $val): self
     {
+        $op = $this->normalizeOperator($op);
         $this->havings[] = [
             'expr' => $expr,
             'op' => $op,
@@ -657,18 +761,22 @@ class Query
 
     public function orderBy(string $col, string $dir = 'asc'): self
     {
-        $this->orders[] = [$col, strtoupper($dir)];
+        $dir = strtoupper(trim($dir));
+        if (!in_array($dir, ['ASC', 'DESC'], true)) throw new \InvalidArgumentException('Order direction must be ASC or DESC.');
+        $this->orders[] = [$col, $dir];
         return $this;
     }
 
     public function limit(int $n): self
     {
+        if ($n < 0) throw new \InvalidArgumentException('Limit must be non-negative.');
         $this->limit = $n;
         return $this;
     }
 
     public function offset(int $n): self
     {
+        if ($n < 0) throw new \InvalidArgumentException('Offset must be non-negative.');
         $this->offset = $n;
         return $this;
     }
@@ -706,7 +814,7 @@ class Query
 
     private function compileSelect(PDO $pdo): array
     {
-        $selectCols = array_map(fn($c) => is_string($c) && $c === '*' ? '*' : $this->db->qi($c, $pdo), $this->select);
+        $selectCols = array_map(fn($c) => $this->compileSelectColumn((string)$c, $pdo), $this->select);
         $select = 'SELECT ' . implode(', ', $selectCols);
         $from = ' FROM ' . $this->compileTable($pdo);
         $join = '';
@@ -721,7 +829,7 @@ class Query
             $hParts = [];
             $hBind = [];
             foreach ($this->havings as $h) {
-                $hParts[] = $h['expr'] . ' ' . $h['op'] . ' ?';
+                $hParts[] = $this->compileExpression($h['expr'], $pdo) . ' ' . $h['op'] . ' ?';
                 $hBind[] = $h['val'];
             }
             $having = ' HAVING ' . implode(' AND ', $hParts);
@@ -737,9 +845,51 @@ class Query
         }
         $limit = $this->limit !== null ? ' LIMIT ' . $this->limit : '';
         $offset = $this->offset !== null ? ' OFFSET ' . $this->offset : '';
-        $locking = $this->forUpdate ? ' FOR UPDATE' . ($this->skipLocked ? ' SKIP LOCKED' : '') : '';
+        $driver = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
+        $locking = '';
+        if ($this->forUpdate) {
+            if (in_array($driver, ['mysql', 'pgsql'], true)) {
+                $locking = ' FOR UPDATE' . ($this->skipLocked ? ' SKIP LOCKED' : '');
+            } else {
+                throw new \RuntimeException("forUpdate is not supported by {$driver}.");
+            }
+        } elseif ($this->skipLocked) {
+            throw new \LogicException('skipLocked requires forUpdate.');
+        }
         $sql = $select . $from . $join . $where . $group . $having . $order . $limit . $offset . $locking;
         return [$sql, $bind];
+    }
+
+    private function compileSelectColumn(string $column, PDO $pdo): string
+    {
+        $column = trim($column);
+        if ($column === '*') return '*';
+        if (preg_match('/^(COUNT|SUM|AVG|MIN|MAX)\s*\(\s*([A-Za-z_][A-Za-z0-9_$]*(?:\.[A-Za-z_][A-Za-z0-9_$]*)?|\*)\s*\)(?:\s+AS\s+([A-Za-z_][A-Za-z0-9_$]*))?$/i', $column, $m)) {
+            $result = strtoupper($m[1]) . '(' . $this->db->qi($m[2], $pdo) . ')';
+            return !empty($m[3]) ? $result . ' AS ' . $this->db->qi($m[3], $pdo) : $result;
+        }
+        if (preg_match('/^([A-Za-z_][A-Za-z0-9_$]*(?:\.[A-Za-z_][A-Za-z0-9_$]*)?)\s+AS\s+([A-Za-z_][A-Za-z0-9_$]*)$/i', $column, $m)) {
+            return $this->db->qi($m[1], $pdo) . ' AS ' . $this->db->qi($m[2], $pdo);
+        }
+        return $this->db->qi($column, $pdo);
+    }
+
+    private function compileExpression(string $expression, PDO $pdo): string
+    {
+        $expression = trim($expression);
+        if (preg_match('/^(COUNT|SUM|AVG|MIN|MAX)\s*\(\s*([A-Za-z_][A-Za-z0-9_$]*(?:\.[A-Za-z_][A-Za-z0-9_$]*)?|\*)\s*\)$/i', $expression, $m)) {
+            return strtoupper($m[1]) . '(' . $this->db->qi($m[2], $pdo) . ')';
+        }
+        return $this->db->qi($expression, $pdo);
+    }
+
+    private function normalizeOperator(string $operator): string
+    {
+        $operator = strtoupper(trim($operator));
+        if (!in_array($operator, ['=', '==', '!=', '<>', '<', '<=', '>', '>=', 'LIKE', 'NOT LIKE', 'ILIKE', 'NOT ILIKE'], true)) {
+            throw new \InvalidArgumentException('Unsupported SQL operator.');
+        }
+        return $operator === '==' ? '=' : $operator;
     }
 
     private function compileWhere(PDO $pdo, bool $includeScope, bool $forSelect = false): array
@@ -750,7 +900,7 @@ class Query
         $sdCol = $this->softDelete['column'];
 
         // Apply onlyTrashed for restore operations
-        if ($this->onlyTrashed && $this->softDelete['enabled'] && $this->hasColumn($sdCol)) {
+        if ($this->onlyTrashed && $this->softDelete['enabled'] && $this->hasColumn($sdCol, $pdo)) {
             $sdColQuoted = $this->db->qi($sdCol, $pdo);
             $non_user_conditions[] = $sdColQuoted . ($this->softDelete['mode'] === 'timestamp' ? ' IS NOT NULL' : ' = ' . $this->softDelete['deleted_value']);
         }
@@ -764,7 +914,7 @@ class Query
         }
 
         // Apply soft delete for select queries (unless withTrashed or onlyTrashed)
-        if ($forSelect && $this->softDelete['enabled'] && $this->hasColumn($sdCol) && !$this->withTrashed && !$this->onlyTrashed) {
+        if ($forSelect && $this->softDelete['enabled'] && $this->hasColumn($sdCol, $pdo) && !$this->withTrashed && !$this->onlyTrashed) {
             $sdColQuoted = $this->db->qi($sdCol, $pdo);
             $non_user_conditions[] = $sdColQuoted . ($this->softDelete['mode'] === 'timestamp' ? ' IS NULL' : ' = 0');
         }
@@ -772,50 +922,55 @@ class Query
         // Join non-user conditions with AND
         $baseWhere = $non_user_conditions ? implode(' AND ', $non_user_conditions) : '';
 
-        // Start parts with baseWhere if exists
-        $parts = $baseWhere ? [$baseWhere] : [];
+        // User predicates are grouped so tenant/scope and soft-delete guards
+        // cannot be bypassed by an OR predicate.
+        $userParts = [];
 
         // Apply user-defined wheres
         foreach ($this->wheres as $idx => $w) {
-            $prefix = empty($parts) ? '' : ' ' . $w['bool'] . ' ';
+            $prefix = empty($userParts) ? '' : ' ' . $w['bool'] . ' ';
             switch ($w['type']) {
                 case 'basic':
-                    $parts[] = $prefix . $this->db->qi($w['col'], $pdo) . ' ' . $w['op'] . ' ?';
+                    $userParts[] = $prefix . $this->db->qi($w['col'], $pdo) . ' ' . $w['op'] . ' ?';
                     $bind[] = $w['val'];
                     break;
                 case 'in':
                     $vals = $w['vals'];
                     if (count($vals) > $this->db->guardMaxIn()) throw new \LengthException('whereIn list exceeds ' . $this->db->guardMaxIn() . ' items');
                     if (empty($vals)) {
-                        $parts[] = $prefix . ($w['not'] ? '1=1' : '1=0');
+                        $userParts[] = $prefix . ($w['not'] ? '1=1' : '1=0');
                         break;
                     }
                     $qs = implode(',', array_fill(0, count($vals), '?'));
-                    $parts[] = $prefix . $this->db->qi($w['col'], $pdo) . ($w['not'] ? ' NOT IN (' : ' IN (') . $qs . ')';
+                    $userParts[] = $prefix . $this->db->qi($w['col'], $pdo) . ($w['not'] ? ' NOT IN (' : ' IN (') . $qs . ')';
                     $bind = array_merge($bind, array_values($vals));
                     break;
                 case 'null':
-                    $parts[] = $prefix . $this->db->qi($w['col'], $pdo) . ($w['not'] ? ' IS NOT NULL' : ' IS NULL');
+                    $userParts[] = $prefix . $this->db->qi($w['col'], $pdo) . ($w['not'] ? ' IS NOT NULL' : ' IS NULL');
                     break;
                 case 'between':
                     $pair = $w['pair'];
                     if (!is_array($pair) || count($pair) !== 2) throw new \InvalidArgumentException('whereBetween requires [min,max]');
-                    $parts[] = $prefix . $this->db->qi($w['col'], $pdo) . ($w['not'] ? ' NOT BETWEEN ? AND ?' : ' BETWEEN ? AND ?');
+                    $userParts[] = $prefix . $this->db->qi($w['col'], $pdo) . ($w['not'] ? ' NOT BETWEEN ? AND ?' : ' BETWEEN ? AND ?');
                     $bind[] = $pair[0];
                     $bind[] = $pair[1];
                     break;
                 case 'json':
                     $jsonPath = explode('->', $w['path']);
                     $col = array_shift($jsonPath);
+                    if (!$jsonPath || !preg_match('/^[A-Za-z_][A-Za-z0-9_]*$/', $col) || count(array_filter($jsonPath, fn($part) => !preg_match('/^[A-Za-z0-9_]+$/', $part)))) {
+                        throw new \InvalidArgumentException('Invalid JSON path.');
+                    }
                     if ($driver === 'mysql') {
                         $path = implode('.', $jsonPath);
-                        $parts[] = $prefix . 'JSON_EXTRACT(' . $this->db->qi($col, $pdo) . ", '$.{$path}') " . $w['op'] . ' ?';
+                        $userParts[] = $prefix . 'JSON_UNQUOTE(JSON_EXTRACT(' . $this->db->qi($col, $pdo) . ", '$.{$path}')) " . $w['op'] . ' ?';
                     } elseif ($driver === 'pgsql') {
-                        $path = implode('->>', $jsonPath);
-                        $parts[] = $prefix . $this->db->qi($col, $pdo) . "->>'{$path}' " . $w['op'] . ' ?';
+                        $expr = $this->db->qi($col, $pdo);
+                        foreach ($jsonPath as $part) $expr .= "->>'{$part}'";
+                        $userParts[] = $prefix . $expr . ' ' . $w['op'] . ' ?';
                     } elseif ($driver === 'sqlite') {
                         $path = implode('.', $jsonPath);
-                        $parts[] = $prefix . 'json_extract(' . $this->db->qi($col, $pdo) . ", '$.{$path}') " . $w['op'] . ' ?';
+                        $userParts[] = $prefix . 'json_extract(' . $this->db->qi($col, $pdo) . ", '$.{$path}') " . $w['op'] . ' ?';
                     } else {
                         throw new \RuntimeException('whereJson not supported on ' . $driver);
                     }
@@ -824,8 +979,8 @@ class Query
             }
         }
 
-        // Join parts without extra operators, as prefixes are already included
-        $sql = implode('', $parts);
+        $userSql = $userParts ? '(' . implode('', $userParts) . ')' : '';
+        $sql = $baseWhere && $userSql ? $baseWhere . ' AND ' . $userSql : ($baseWhere ?: $userSql);
         return [$sql, $bind];
     }
 
@@ -856,9 +1011,9 @@ class Query
         if ($this->db->isReadonly()) throw new \RuntimeException('Readonly mode: write operation blocked.');
     }
 
-    private function hasColumn(string $column): bool
+    private function hasColumn(string $column, ?PDO $pdo = null): bool
     {
-        $pdo = $this->db->choosePdo('select');
+        $pdo ??= $this->db->choosePdo('select');
         $cols = $this->db->getColumns($this->table, $pdo);
         return in_array($column, $cols, true);
     }
@@ -1058,6 +1213,7 @@ class Query
     public function insert(array $data): int
     {
         $this->assertWritable();
+        if (!$data) throw new \InvalidArgumentException('Insert data cannot be empty.');
         $pdo = $this->db->choosePdo('insert');
         $cols = array_keys($data);
         $placeholders = implode(',', array_fill(0, count($cols), '?'));
@@ -1085,6 +1241,12 @@ class Query
         $pdo = $this->db->choosePdo('insert');
         if (empty($rows)) return [];
         $cols = array_keys($rows[0]);
+        if (!$cols) throw new \InvalidArgumentException('Insert rows cannot be empty.');
+        foreach ($rows as $index => $row) {
+            if (array_keys($row) !== $cols) {
+                throw new \InvalidArgumentException("Insert row {$index} must have the same columns as row 0.");
+            }
+        }
         $placeholders = '(' . implode(',', array_fill(0, count($cols), '?')) . ')';
         $sql = 'INSERT INTO ' . $this->compileTable($pdo) . ' (' . implode(',', array_map(fn($c) => $this->db->qi($c, $pdo), $cols)) . ') VALUES ' . implode(',', array_fill(0, count($rows), $placeholders));
         $params = [];
@@ -1153,6 +1315,7 @@ class Query
     public function update(array $data): int
     {
         $this->assertWritable();
+        if (!$data) throw new \InvalidArgumentException('Update data cannot be empty.');
         $pdo = $this->db->choosePdo('update');
         $sets = [];
         $params = [];
@@ -1303,6 +1466,7 @@ class Query
     public function upsert(array $data, array $conflict, array $updateColumns): int
     {
         $this->assertWritable();
+        if (!$data || !$conflict) throw new \InvalidArgumentException('Upsert data and conflict columns are required.');
         $pdo = $this->db->choosePdo('insert');
         $driver = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
         if (!$this->db->hasUniqueConstraint($this->table, $conflict)) {
@@ -1317,19 +1481,20 @@ class Query
             if (!in_array($col, $cols)) {
                 throw new \InvalidArgumentException("Update column '$col' not in insert data");
             }
-            $updateSets[] = $this->db->qi($col, $pdo) . ' = EXCLUDED.' . $this->db->qi($col, $pdo);
+            $updateSets[] = $this->db->qi($col, $pdo) . ' = ' . ($driver === 'mysql'
+                ? 'VALUES(' . $this->db->qi($col, $pdo) . ')'
+                : 'EXCLUDED.' . $this->db->qi($col, $pdo));
         }
         $updateClause = implode(',', $updateSets);
 
         if ($driver === 'pgsql') {
-            $sql = 'INSERT INTO ' . $this->compileTable($pdo) . ' (' . implode(',', array_map(fn($c) => $this->db->qi($c, $pdo), $cols)) . ') VALUES (' . $placeholders . ') ON CONFLICT (' . $conflictCols . ') DO UPDATE SET ' . $updateClause;
+            $sql = 'INSERT INTO ' . $this->compileTable($pdo) . ' (' . implode(',', array_map(fn($c) => $this->db->qi($c, $pdo), $cols)) . ') VALUES (' . $placeholders . ') ON CONFLICT (' . $conflictCols . ') ' . ($updateClause ? 'DO UPDATE SET ' . $updateClause : 'DO NOTHING');
         } elseif ($driver === 'mysql') {
-            $sql = 'INSERT INTO ' . $this->compileTable($pdo) . ' (' . implode(',', array_map(fn($c) => $this->db->qi($c, $pdo), $cols)) . ') VALUES (' . $placeholders . ') ON DUPLICATE KEY UPDATE ' . $updateClause;
+            $sql = 'INSERT INTO ' . $this->compileTable($pdo) . ' (' . implode(',', array_map(fn($c) => $this->db->qi($c, $pdo), $cols)) . ') VALUES (' . $placeholders . ')' . ($updateClause ? ' ON DUPLICATE KEY UPDATE ' . $updateClause : ' ON DUPLICATE KEY UPDATE ' . $this->db->qi($conflict[0], $pdo) . ' = ' . $this->db->qi($conflict[0], $pdo));
         } elseif ($driver === 'sqlite') {
-            $sql = 'INSERT INTO ' . $this->compileTable($pdo) . ' (' . implode(',', array_map(fn($c) => $this->db->qi($c, $pdo), $cols)) . ') VALUES (' . $placeholders . ') ON CONFLICT (' . $conflictCols . ') DO UPDATE SET ' . $updateClause;
+            $sql = 'INSERT INTO ' . $this->compileTable($pdo) . ' (' . implode(',', array_map(fn($c) => $this->db->qi($c, $pdo), $cols)) . ') VALUES (' . $placeholders . ') ON CONFLICT (' . $conflictCols . ') ' . ($updateClause ? 'DO UPDATE SET ' . $updateClause : 'DO NOTHING');
         } else {
-            $sql = 'INSERT INTO ' . $this->compileTable($pdo) . ' (' . implode(',', array_map(fn($c) => $this->db->qi($c, $pdo), $cols)) . ') VALUES (' . $placeholders . ')';
-            $params = array_values($data);
+            throw new \RuntimeException("upsert is not supported by {$driver}.");
         }
 
         $ctx = ['type' => 'insert', 'table' => $this->table];
@@ -1354,11 +1519,15 @@ class Query
     public function getKeyset(?string $cursor, string $key): array
     {
         $pdo = $this->db->choosePdo('select');
+        if (!preg_match('/^[A-Za-z_][A-Za-z0-9_$]*(?:\.[A-Za-z_][A-Za-z0-9_$]*)?$/', $key)) throw new \InvalidArgumentException('Invalid keyset column.');
+        $direction = $this->orders ? $this->orders[array_key_last($this->orders)][1] : 'ASC';
         if ($cursor) {
-            $decoded = json_decode(base64_decode($cursor), true);
-            if ($decoded && isset($decoded['last'])) {
+            $decoded = json_decode((string)base64_decode($cursor, true), true);
+            if (!is_array($decoded) || !array_key_exists('last', $decoded)) throw new \InvalidArgumentException('Invalid pagination cursor.');
+            if (($decoded['direction'] ?? $direction) !== $direction) throw new \InvalidArgumentException('Cursor direction does not match query order.');
+            if ($decoded && array_key_exists('last', $decoded)) {
                 $last = $decoded['last'];
-                $this->where($key, '>', $last);
+                $this->where($key, $direction === 'DESC' ? '<' : '>', $last);
             }
         }
         $rows = $this->get();
@@ -1366,7 +1535,7 @@ class Query
         if ($rows && count($rows) === ($this->limit ?? PHP_INT_MAX)) {
             $last = end($rows)[$key] ?? null;
             if ($last !== null) {
-                $next = base64_encode(json_encode(['last' => $last]));
+                $next = base64_encode(json_encode(['last' => $last, 'direction' => $direction], JSON_THROW_ON_ERROR));
             }
         }
         return ['data' => $rows, 'next' => $next];
@@ -1427,14 +1596,16 @@ class Query
         return $this;
     }
 
-    public function cast(string $expr): string
+    public function cast(string $expr, string $type = 'TEXT'): string
     {
-        return 'CAST(' . $expr . ')';
+        if (!preg_match('/^[A-Za-z][A-Za-z0-9_]*(?:\(\d+(?:,\d+)?\))?$/', $type)) throw new \InvalidArgumentException('Invalid cast type.');
+        return 'CAST(' . $expr . ' AS ' . strtoupper($type) . ')';
     }
 
     public function jsonSet(string $col, array $updates): self
     {
         $this->assertWritable();
+        if (!$updates) throw new \InvalidArgumentException('JSON updates cannot be empty.');
         $pdo = $this->db->choosePdo('update');
         $driver = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
         if ($driver === 'sqlite') {
@@ -1443,6 +1614,7 @@ class Query
         $updatesSql = [];
         $params = [];
         foreach ($updates as $path => $val) {
+            if (!preg_match('/^[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)*$/', (string)$path)) throw new \InvalidArgumentException('Invalid JSON update path.');
             if ($driver === 'mysql') {
                 $updatesSql[] = $this->db->qi($col, $pdo) . ' = JSON_SET(' . $this->db->qi($col, $pdo) . ', \'$.' . $path . '\', ?)';
                 $params[] = $val;
@@ -1478,8 +1650,4 @@ class Query
         });
         return $runner($ctx);
     }
-}
-
-if (php_sapi_name() === 'cli' && realpath($argv[0] ?? '') === __FILE__) {
-    \ndtan\DBF::cli($argv);
 }
