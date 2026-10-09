@@ -23,15 +23,16 @@ final class RegressionTest extends TestCase
     public function testLostTransactionBlocksFurtherWritesAndPreservesFailure(): void
     {
         $db = $this->database();
+        $scoped = $db->withScope(['tenant' => 1]);
         try {
-            $db->tx(function (DBF $tx): void {
+            $db->tx(function (DBF $tx) use ($scoped): void {
                 $tx->table('items')->insert(['name' => 'a']);
                 try {
                     $tx->tx(fn(DBF $nested) => $nested->execute("INSERT OR ROLLBACK INTO items(name) VALUES ('a')"));
                 } catch (\PDOException $e) {
                     $this->assertStringContainsString('UNIQUE', $e->getMessage());
                 }
-                $tx->table('items')->insert(['name' => 'outside']);
+                $scoped->table('items')->insert(['name' => 'outside']);
             }, 1);
             $this->fail('Lost transaction must fail.');
         } catch (\LogicException $e) {

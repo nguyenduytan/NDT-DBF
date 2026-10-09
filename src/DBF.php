@@ -50,8 +50,7 @@ final class DBF
 
     private int $maxInParams = 1000;
 
-    private int $transactionDepth = 0;
-    private int $savepointCounter = 0;
+    private object $transactionState;
 
     private array $softDelete = [
         'enabled' => false,
@@ -65,6 +64,7 @@ final class DBF
 
     public function __construct(string|array|PDO|null $configOrUri = null)
     {
+        $this->transactionState = (object)['depth' => 0, 'savepointCounter' => 0];
         if ($configOrUri === null) {
             $env = getenv('NDTAN_DBF_URL') ?: throw new \InvalidArgumentException('No configuration provided. Pass URI/array/PDO or set NDTAN_DBF_URL.');
             $configOrUri = $env;
@@ -353,7 +353,7 @@ final class DBF
 
     public function execPreparedOn(PDO $pdo, string $sql, array $params, int $timeoutMs = 0): PDOStatement
     {
-        if ($this->transactionDepth > 0 && !$this->pdoWrite->inTransaction()) throw new \LogicException('Transaction ownership was lost; further queries are blocked.');
+        if ($this->transactionState->depth > 0 && !$this->pdoWrite->inTransaction()) throw new \LogicException('Transaction ownership was lost; further queries are blocked.');
         $restore = null;
         if ($timeoutMs > 0) {
             $driver = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
@@ -408,7 +408,7 @@ final class DBF
 
     public function choosePdo(string $type): PDO
     {
-        if ($this->transactionDepth > 0 && !$this->pdoWrite->inTransaction()) throw new \LogicException('Transaction ownership was lost; further queries are blocked.');
+        if ($this->transactionState->depth > 0 && !$this->pdoWrite->inTransaction()) throw new \LogicException('Transaction ownership was lost; further queries are blocked.');
         if ($this->pdoWrite->inTransaction()) return $this->pdoWrite;
         if (!in_array($type, ['select', 'aggregate', 'raw_read'], true)) return $this->pdoWrite;
         if ($this->routing === 'single') return $this->pdoWrite;
@@ -475,15 +475,16 @@ final class DBF
         if ($this->readonly) throw new \RuntimeException('Readonly mode: transactions are blocked.');
         if ($this->testMode) throw new \LogicException('Transactions require execution mode.');
         if (!in_array($this->driverWrite, ['mysql', 'pgsql', 'sqlite'], true)) throw new \RuntimeException('Transactions are supported on MySQL, PostgreSQL and SQLite.');
-        if ($this->transactionDepth === 0 && $this->pdoWrite->inTransaction()) throw new \LogicException('Transaction is already owned by another DBF instance or external PDO caller.');
-        if ($this->transactionDepth > 0) {
-            $savepoint = 'ndtan_sp_' . (++$this->savepointCounter);
+        if ($this->transactionState->depth === 0 && $this->pdoWrite->inTransaction()) throw new \LogicException('Transaction is already owned by another DBF instance or external PDO caller.');
+        if ($this->transactionState->depth > 0) {
+            if (!$this->pdoWrite->inTransaction()) throw new \LogicException('Transaction ownership was lost.');
+            $savepoint = 'ndtan_sp_' . (++$this->transactionState->savepointCounter);
             $this->pdoWrite->exec('SAVEPOINT ' . $savepoint);
-            ++$this->transactionDepth;
+            ++$this->transactionState->depth;
             try {
                 $result = $fn($this);
                 $this->pdoWrite->exec('RELEASE SAVEPOINT ' . $savepoint);
-                --$this->transactionDepth;
+                --$this->transactionState->depth;
                 return $result;
             } catch (Throwable $e) {
                 try {
@@ -494,7 +495,7 @@ final class DBF
                 } catch (Throwable $cleanup) {
                     if ($this->pdoWrite->inTransaction()) $this->pdoWrite->rollBack();
                 } finally {
-                    --$this->transactionDepth;
+                    --$this->transactionState->depth;
                 }
                 throw $e;
             }
@@ -502,18 +503,18 @@ final class DBF
         for ($i = 1; $i <= $attempts; $i++) {
             try {
                 $this->pdoWrite->beginTransaction();
-                $this->transactionDepth = 1;
+                $this->transactionState->depth = 1;
                 $res = $fn($this);
                 if (!$this->pdoWrite->inTransaction()) throw new \LogicException('Transaction ownership was lost.');
                 $this->pdoWrite->commit();
-                $this->transactionDepth = 0;
+                $this->transactionState->depth = 0;
                 return $res;
             } catch (Throwable $e) {
                 try {
                     if ($this->pdoWrite->inTransaction()) $this->pdoWrite->rollBack();
                 } catch (Throwable $cleanup) {
                 }
-                $this->transactionDepth = 0;
+                $this->transactionState->depth = 0;
                 $retryable = $e instanceof \PDOException && (
                     in_array((string)$e->getCode(), ['40001', '40P01'], true) ||
                     in_array((int)($e->errorInfo[1] ?? 0), [5, 6, 1205, 1213], true)
