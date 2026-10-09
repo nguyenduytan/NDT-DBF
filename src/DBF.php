@@ -64,7 +64,7 @@ final class DBF
 
     public function __construct(string|array|PDO|null $configOrUri = null)
     {
-        $this->transactionState = (object)['depth' => 0, 'savepointCounter' => 0];
+        $this->transactionState = (object)['depth' => 0, 'savepointCounter' => 0, 'broken' => false];
         if ($configOrUri === null) {
             $env = getenv('NDTAN_DBF_URL') ?: throw new \InvalidArgumentException('No configuration provided. Pass URI/array/PDO or set NDTAN_DBF_URL.');
             $configOrUri = $env;
@@ -353,7 +353,7 @@ final class DBF
 
     public function execPreparedOn(PDO $pdo, string $sql, array $params, int $timeoutMs = 0): PDOStatement
     {
-        if ($this->transactionState->depth > 0 && !$this->pdoWrite->inTransaction()) throw new \LogicException('Transaction ownership was lost; further queries are blocked.');
+        if ($this->transactionState->depth > 0 && ($this->transactionState->broken || !$this->pdoWrite->inTransaction())) throw new \LogicException('Transaction ownership was lost; further queries are blocked.');
         $restore = null;
         if ($timeoutMs > 0) {
             $driver = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
@@ -408,7 +408,7 @@ final class DBF
 
     public function choosePdo(string $type): PDO
     {
-        if ($this->transactionState->depth > 0 && !$this->pdoWrite->inTransaction()) throw new \LogicException('Transaction ownership was lost; further queries are blocked.');
+        if ($this->transactionState->depth > 0 && ($this->transactionState->broken || !$this->pdoWrite->inTransaction())) throw new \LogicException('Transaction ownership was lost; further queries are blocked.');
         if ($this->pdoWrite->inTransaction()) return $this->pdoWrite;
         if (!in_array($type, ['select', 'aggregate', 'raw_read'], true)) return $this->pdoWrite;
         if ($this->routing === 'single') return $this->pdoWrite;
@@ -477,7 +477,7 @@ final class DBF
         if (!in_array($this->driverWrite, ['mysql', 'pgsql', 'sqlite'], true)) throw new \RuntimeException('Transactions are supported on MySQL, PostgreSQL and SQLite.');
         if ($this->transactionState->depth === 0 && $this->pdoWrite->inTransaction()) throw new \LogicException('Transaction is already owned by another DBF instance or external PDO caller.');
         if ($this->transactionState->depth > 0) {
-            if (!$this->pdoWrite->inTransaction()) throw new \LogicException('Transaction ownership was lost.');
+            if ($this->transactionState->broken || !$this->pdoWrite->inTransaction()) throw new \LogicException('Transaction ownership was lost.');
             $savepoint = 'ndtan_sp_' . (++$this->transactionState->savepointCounter);
             $this->pdoWrite->exec('SAVEPOINT ' . $savepoint);
             ++$this->transactionState->depth;
@@ -493,7 +493,11 @@ final class DBF
                         $this->pdoWrite->exec('RELEASE SAVEPOINT ' . $savepoint);
                     }
                 } catch (Throwable $cleanup) {
-                    if ($this->pdoWrite->inTransaction()) $this->pdoWrite->rollBack();
+                    $this->transactionState->broken = true;
+                    try {
+                        if ($this->pdoWrite->inTransaction()) $this->pdoWrite->rollBack();
+                    } catch (Throwable $rollback) {
+                    }
                 } finally {
                     --$this->transactionState->depth;
                 }
@@ -503,9 +507,10 @@ final class DBF
         for ($i = 1; $i <= $attempts; $i++) {
             try {
                 $this->pdoWrite->beginTransaction();
+                $this->transactionState->broken = false;
                 $this->transactionState->depth = 1;
                 $res = $fn($this);
-                if (!$this->pdoWrite->inTransaction()) throw new \LogicException('Transaction ownership was lost.');
+                if ($this->transactionState->broken || !$this->pdoWrite->inTransaction()) throw new \LogicException('Transaction ownership was lost.');
                 $this->pdoWrite->commit();
                 $this->transactionState->depth = 0;
                 return $res;
