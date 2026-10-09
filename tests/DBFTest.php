@@ -251,7 +251,7 @@ final class DBFTest extends TestCase
 
     public function testVersionAndQualifiedIdentifiers(): void
     {
-        $this->assertSame('0.3.0', DBF::VERSION);
+        $this->assertSame('0.3.1', DBF::VERSION);
         $this->db->raw('CREATE TABLE profiles (id INTEGER PRIMARY KEY, user_id INTEGER, name TEXT)');
         $this->db->table('users')->insert(['id' => 1, 'email' => 'a@ndtan.net']);
         $this->db->table('profiles')->insert(['id' => 1, 'user_id' => 1, 'name' => 'Tony']);

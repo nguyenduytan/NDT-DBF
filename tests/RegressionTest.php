@@ -7,6 +7,33 @@ use PHPUnit\Framework\TestCase;
 
 final class RegressionTest extends TestCase
 {
+    public function testReleaseDocumentationAndQuickStart(): void
+    {
+        $root = dirname(__DIR__);
+        $config = require $root . '/website/config.php';
+        $readme = file_get_contents($root . '/README.md');
+        $this->assertSame(DBF::VERSION, $config['version']);
+        $this->assertStringContainsString('/releases/download/v' . DBF::VERSION . '/DBF.php', $readme);
+        $this->assertStringContainsString('/web3-v' . DBF::VERSION . '.zip', $readme);
+        $this->assertStringContainsString('## ' . DBF::VERSION . ' - ', file_get_contents($root . '/CHANGELOG.md'));
+        $this->assertFileExists($root . '/assets/brand/logo.png');
+        preg_match_all('/```php\R(.*?)\R```/s', $readme, $matches);
+        $this->assertNotEmpty($matches[1]);
+        foreach ($matches[1] as $snippet) {
+            $code = str_starts_with(ltrim($snippet), '<?php') ? $snippet : '<?php ' . $snippet;
+            token_get_all($code, TOKEN_PARSE);
+        }
+        $quickStart = str_replace("require __DIR__ . '/DBF.php';", 'require_once ' . var_export($root . '/src/DBF.php', true) . ';', $matches[1][0]);
+        ob_start();
+        try {
+            eval('?>' . $quickStart);
+            $output = ob_get_contents();
+        } finally {
+            ob_end_clean();
+        }
+        $this->assertSame('tony@example.com', $output);
+    }
+
     public function testQualifiedTableSoftDeleteAndJoinedTrashed(): void
     {
         $db = new DBF(['write' => new PDO('sqlite::memory:'), 'features' => ['soft_delete' => ['enabled' => true, 'mode' => 'timestamp']]]);

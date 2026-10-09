@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.1 - 2026-10-09
+
+- Refined README layout, navigation and database support matrix.
+- Added a runnable SQLite quick start, upgrade guide and manual PHP website upload instructions.
+- Synchronized runtime version, website badges, pinned downloads and package examples.
+- Added documentation checks for release metadata and README examples.
+- No SQL API or runtime behavior changes from 0.3.0.
+
 ## 0.3.0 - 2026-10-09
 
 ### Fixed

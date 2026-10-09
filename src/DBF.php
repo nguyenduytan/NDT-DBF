@@ -2,7 +2,7 @@
 /**
  * NDT DBF - Single-file PHP SQL Framework
  *
- * @version   0.3.0
+ * @version   0.3.1
  * @package   NDT DBF
  * @description Single-file PDO query builder, transactions and JSON operations.
  * @author    Tony Nguyen
@@ -23,7 +23,7 @@ use Throwable;
 
 final class DBF
 {
-    public const VERSION = '0.3.0';
+    public const VERSION = '0.3.1';
     private PDO $pdoWrite;
     private ?PDO $pdoRead = null;
     private string $driverWrite;

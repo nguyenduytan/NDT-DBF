@@ -46,8 +46,8 @@ foreach ($documents as $page => [$xpath, $ids]) {
     }
 }
 $config = require $root . '/config.php';
-check($config['version'] === '0.3.0', 'Wrong release version');
-check(str_contains($config['download_raw'], '/v0.3.0/src/DBF.php'), 'Download is not pinned');
+check($config['version'] === '0.3.1', 'Wrong release version');
+check(str_contains($config['download_raw'], '/v' . $config['version'] . '/src/DBF.php'), 'Download is not pinned');
 $maintenance = render(['-r', '$config = require ' . var_export($root . '/config.php', true) . '; $config["maintenance"] = true; include ' . var_export($root . '/includes/header.php', true) . '; echo "RENDER_MUST_STOP";']);
 check(str_contains($maintenance, 'Maintenance') && !str_contains($maintenance, 'RENDER_MUST_STOP'), 'Maintenance did not stop rendering');
 echo "PASS: page rendering, anchors, local assets, PHP examples, pinned release and maintenance exit\n";

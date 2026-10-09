@@ -1,6 +1,6 @@
 <?php
 $repo = 'https://github.com/nguyenduytan/NDT-DBF';
-$version = '0.3.0';
+$version = '0.3.1';
 return [
     'brand_name' => 'NDT DBF',
     'version' => $version,

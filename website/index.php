@@ -35,7 +35,7 @@ $users = $db-&gt;table('users')
     -&gt;where('status', '=', 'active')
     -&gt;orderBy('id', 'asc')
     -&gt;get();</code></pre>
-    <p>Prefer Composer? <code>composer require ndtan/dbf:0.3.0</code>, then load <code>vendor/autoload.php</code>.</p>
+    <p>Prefer Composer? <code>composer require ndtan/dbf:0.3.1</code>, then load <code>vendor/autoload.php</code>.</p>
   </section>
   <section class="guide-index">
     <h2>Explore the documentation</h2>

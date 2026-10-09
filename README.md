@@ -1,37 +1,85 @@
-<p align="center"><img alt="NDT DBF" src="./assets/brand/logo.png" width="360"></p>
+<p align="center"><a href="https://github.com/nguyenduytan/NDT-DBF"><img alt="NDT DBF" src="./assets/brand/logo.png" width="360"></a></p>
 
-# NDT DBF 0.3.0
+<h1 align="center">NDT DBF</h1>
 
-A PHP SQL framework whose entire runtime is contained in **one file: `DBF.php`**.
-PDO is the only runtime dependency. Use the query builder or parameterized SQL.
+<p align="center">A single-file PHP SQL framework.<br>Query builder, transactions, JSON and read/write routing, powered by PDO.</p>
 
 [![Release](https://img.shields.io/github/v/release/nguyenduytan/NDT-DBF?label=release)](https://github.com/nguyenduytan/NDT-DBF/releases/latest)
 [![CI](https://github.com/nguyenduytan/NDT-DBF/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/nguyenduytan/NDT-DBF/actions/workflows/ci.yml)
 [![PHP](https://img.shields.io/badge/php-%3E%3D%208.1-777bb4)](https://www.php.net/)
 [![License](https://img.shields.io/badge/license-MIT-brightgreen)](LICENSE.md)
 
-[Download DBF.php](https://github.com/nguyenduytan/NDT-DBF/releases/download/v0.3.0/DBF.php) |
+[Download DBF.php v0.3.1](https://github.com/nguyenduytan/NDT-DBF/releases/download/v0.3.1/DBF.php) |
+[Download website](https://github.com/nguyenduytan/NDT-DBF/releases/download/v0.3.1/web3-v0.3.1.zip) |
 [Release notes](CHANGELOG.md) |
 [Website source](website/) |
 [Author](https://ndtan.net)
 
-## Requirements
+The complete runtime lives in **`DBF.php`**. No bootstrap, generated classes or runtime
+packages are required beyond PDO and your database's PDO driver. Use it directly or install with Composer.
 
-PHP 8.1 or later, PDO, and the database's PDO extension.
-SQLite tests require SQLite JSON functions and SQLite 3.35+ for `RETURNING`.
+## Contents
+
+- [Quick start](#quick-start)
+- [Requirements and database support](#requirements-and-database-support)
+- [Install](#install) / [Connection](#connection) / [Read/write routing](#read--write-routing)
+- [Query builder](#query-builder) / [Joins and aggregates](#joins-and-aggregates) / [Writes](#writes)
+- [Soft delete and scope](#soft-delete-and-scope) / [Transactions and row locks](#transactions-and-row-locks)
+- [Pagination and streaming](#pagination-and-streaming) / [JSON](#json) / [Raw SQL](#raw-sql)
+- [Observability and test mode](#observability-and-test-mode)
+- [Upgrade guide](#upgrade-guide) / [Tests](#tests) / [Website upload](#website-upload) / [License](#license)
+
+## Quick Start
+
+With the downloaded `DBF.php` beside your script, this complete example runs on SQLite
+without a database server:
+
+```php
+<?php
+require __DIR__ . '/DBF.php';
+
+use ndtan\DBF;
+
+$db = new DBF('sqlite::memory:');
+$db->execute('CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT UNIQUE, status TEXT)');
+
+$id = $db->tx(function (DBF $tx): int {
+    return $tx->table('users')->insert([
+        'email' => 'tony@example.com',
+        'status' => 'active',
+    ]);
+});
+
+$user = $db->table('users')
+    ->select(['id', 'email'])
+    ->where('id', '=', $id)
+    ->first();
+
+echo $user['email']; // tony@example.com
+```
+
+For Composer, replace the `require` line with `require __DIR__ . '/vendor/autoload.php';`.
+The API examples below assume the relevant tables and columns already exist.
+
+## Requirements and Database Support
+
+PHP **8.1+**, PDO, and the PDO extension for your database.
+SQLite JSON examples need JSON functions; `RETURNING` needs SQLite 3.35+.
 
 | Feature | MySQL / MariaDB | PostgreSQL | SQLite | SQL Server / Oracle |
 | --- | --- | --- | --- | --- |
-| Connection, quoted CRUD, pagination | Yes | Yes | Yes | Basic SQL compilation; not integration tested |
-| Transactions and nested savepoints | Yes | Yes | Yes | Throws unsupported |
-| Upsert and unique metadata | Yes | Yes | Yes | Throws unsupported |
-| JSON read and update | Yes | Yes, JSONB for updates | Yes | Throws unsupported |
-| Row locking | Yes, version dependent | Yes | Unsupported | Unsupported |
-| Query timeout | MySQL SELECT / MariaDB statement | Statement | Lock wait only | Unsupported |
+| Connection, quoted CRUD, pagination | Supported | Supported | Supported | SQL compilation only; no live integration tests |
+| Transactions and nested savepoints | Supported | Supported | Supported | Not supported |
+| Upsert and unique metadata | Supported | Supported | Supported | Not supported |
+| JSON read and update | Supported | JSONB for updates | Supported | Not supported |
+| Row locking | Version dependent | Supported | Not supported | Not supported |
+| Query timeout | SELECT / MariaDB statement | Statement | Lock wait only | Not supported |
 
-Unsupported features fail explicitly. SQL Server pagination requires an order and positive limit.
-Oracle pagination requires Oracle 12c+. Use lowercase PostgreSQL identifiers or quote exact names.
-This package is a SQL library; it does not provide an ORM or migrations.
+CI verifies PHP **8.1-8.5**, MySQL **8.4** and PostgreSQL **16**, plus SQLite.
+MariaDB shares the MySQL dialect but has no dedicated integration job.
+Unsupported features fail explicitly. SQL Server pagination requires an order and positive limit;
+Oracle pagination requires Oracle 12c+. PostgreSQL identifiers are quoted exactly as supplied.
+This is a SQL library, not an ORM, migration system or database permission boundary.
 
 ## Install
 
@@ -221,6 +269,8 @@ Only the outer transaction retries known deadlock/serialization/busy errors.
 The callback may run more than once: keep email, payment, and other external side effects outside it.
 Do not begin/commit a transaction manually inside the callback.
 Externally owned PDO transactions cannot be nested through `tx()`.
+Clones share transaction ownership. If the database destroys a transaction or savepoint cleanup
+fails, further queries in that transaction are blocked rather than silently autocommitted.
 
 `forUpdate()` requires an active MySQL/PostgreSQL transaction and always uses the writer.
 `skipLocked()` requires `forUpdate()` and database version support.
@@ -309,19 +359,56 @@ Transactions are blocked in test mode.
 `timeout(ms)` restores connection settings after execution. MySQL execution limits apply to SELECT,
 MariaDB and PostgreSQL have statement timeouts; SQLite busy_timeout limits lock waits, not CPU time.
 
-## Tests and Website
+## Upgrade Guide
+
+**From 0.3.0 to 0.3.1:** replace `DBF.php` or update the Composer package.
+This patch updates documentation and release metadata; the SQL API and behavior are unchanged.
+
+**From 0.2.x or earlier:** review the [0.3.0 upgrade notes](CHANGELOG.md#upgrade-notes) before deployment:
+
+- Regenerate keyset cursors; use one selected, unique, non-null key and a positive limit.
+- `raw()` always uses the writer and is blocked in readonly mode. Use `selectRaw()` for reader SELECTs.
+- `insertMany()` uses individual inserts within a transaction for accurate IDs and atomic rollback.
+- Numeric database types are preserved; DECIMAL results may be strings.
+- Shared statement caching and automatic query re-execution have been removed.
+
+Test against your actual database and back up production data before upgrading.
+
+## Tests
 
 ```bash
 composer install
 composer test -- --exclude-group integration
-php -S 127.0.0.1:8080 -t website
+php website/tests/docs-check.php
 ```
 
 CI runs SQLite regression tests on PHP 8.1-8.5 and integration tests against MySQL 8.4/PostgreSQL 16.
 Integration tests use disposable tables in a dedicated test database.
-The `website/` directory is synchronized with the project's `web3/` docs site.
-Publish it on a PHP host; it needs no SQL connection.
+`tests/RegressionTest.php` covers routing, savepoints, scoped clones, JSON, soft deletes,
+keyset boundaries, atomic inserts and independent cursors. SQL Server/Oracle checks cover
+SQL generation only, not live execution.
+
+## Website Upload
+
+The [website bundle](https://github.com/nguyenduytan/NDT-DBF/releases/download/v0.3.1/web3-v0.3.1.zip)
+and [`website/`](website/) contain the same documentation site as the local `web3/` directory.
+The website requires PHP 8.1+ but **no database connection**. It is not a GitHub Pages static site.
+
+1. Upload the bundle's contents to your PHP hosting document root or a subdirectory.
+2. Keep `assets/`, `includes/` and `pages/` alongside `index.php`, `docs.php` and `config.php`.
+3. Review `config.php` for brand, author, release and maintenance settings.
+4. Open `index.php` and `docs.php`; verify search, code-copy buttons, badges and downloads.
+
+For a local preview:
+
+```bash
+php -S 127.0.0.1:8080 -t website
+```
+
+Open `http://127.0.0.1:8080/`. Routes work from a subdirectory without URL rewriting.
+Badges and syntax highlighting use external services/CDNs; the documentation remains readable
+without them. No hosting deployment is performed by the package or release workflow.
 
 ## License
 
-MIT, Tony Nguyen. [Donate](https://www.paypal.com/paypalme/copbeo).
+[MIT](LICENSE.md), Tony Nguyen. [Author](https://ndtan.net) / [Support the project](https://www.paypal.com/paypalme/copbeo).
