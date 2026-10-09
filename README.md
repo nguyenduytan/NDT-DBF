@@ -1,18 +1,17 @@
 <p align="center"><a href="https://github.com/nguyenduytan/NDT-DBF"><img alt="NDT DBF" src="./assets/brand/logo.png" width="360"></a></p>
 
-<h1 align="center">NDT DBF</h1>
-
 <p align="center">A single-file PHP SQL framework.<br>Query builder, transactions, JSON and read/write routing, powered by PDO.</p>
 
-[![Release](https://img.shields.io/github/v/release/nguyenduytan/NDT-DBF?label=release)](https://github.com/nguyenduytan/NDT-DBF/releases/latest)
-[![CI](https://github.com/nguyenduytan/NDT-DBF/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/nguyenduytan/NDT-DBF/actions/workflows/ci.yml)
-[![PHP](https://img.shields.io/badge/php-%3E%3D%208.1-777bb4)](https://www.php.net/)
-[![License](https://img.shields.io/badge/license-MIT-brightgreen)](LICENSE.md)
+<p align="center">
+  <a href="https://github.com/nguyenduytan/NDT-DBF/releases/latest"><img alt="Release" src="https://img.shields.io/github/v/release/nguyenduytan/NDT-DBF?label=release"></a>
+  <a href="https://github.com/nguyenduytan/NDT-DBF/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/nguyenduytan/NDT-DBF/actions/workflows/ci.yml/badge.svg?branch=main"></a>
+  <a href="https://www.php.net/"><img alt="PHP 8.1 or newer" src="https://img.shields.io/badge/php-%3E%3D%208.1-777bb4"></a>
+  <a href="LICENSE.md"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-brightgreen"></a>
+</p>
 
 [Download DBF.php v0.3.1](https://github.com/nguyenduytan/NDT-DBF/releases/download/v0.3.1/DBF.php) |
-[Download website](https://github.com/nguyenduytan/NDT-DBF/releases/download/v0.3.1/web3-v0.3.1.zip) |
 [Release notes](CHANGELOG.md) |
-[Website source](website/) |
+[Website](https://ndtan.net) |
 [Author](https://ndtan.net)
 
 The complete runtime lives in **`DBF.php`**. No bootstrap, generated classes or runtime
@@ -27,7 +26,7 @@ packages are required beyond PDO and your database's PDO driver. Use it directly
 - [Soft delete and scope](#soft-delete-and-scope) / [Transactions and row locks](#transactions-and-row-locks)
 - [Pagination and streaming](#pagination-and-streaming) / [JSON](#json) / [Raw SQL](#raw-sql)
 - [Observability and test mode](#observability-and-test-mode)
-- [Upgrade guide](#upgrade-guide) / [Tests](#tests) / [Website upload](#website-upload) / [License](#license)
+- [Upgrade guide](#upgrade-guide) / [Tests](#tests) / [Website](#website) / [License](#license)
 
 ## Quick Start
 
@@ -379,7 +378,6 @@ Test against your actual database and back up production data before upgrading.
 ```bash
 composer install
 composer test -- --exclude-group integration
-php website/tests/docs-check.php
 ```
 
 CI runs SQLite regression tests on PHP 8.1-8.5 and integration tests against MySQL 8.4/PostgreSQL 16.
@@ -388,26 +386,11 @@ Integration tests use disposable tables in a dedicated test database.
 keyset boundaries, atomic inserts and independent cursors. SQL Server/Oracle checks cover
 SQL generation only, not live execution.
 
-## Website Upload
+## Website
 
-The [website bundle](https://github.com/nguyenduytan/NDT-DBF/releases/download/v0.3.1/web3-v0.3.1.zip)
-and [`website/`](website/) contain the same documentation site as the local `web3/` directory.
-The website requires PHP 8.1+ but **no database connection**. It is not a GitHub Pages static site.
-
-1. Upload the bundle's contents to your PHP hosting document root or a subdirectory.
-2. Keep `assets/`, `includes/` and `pages/` alongside `index.php`, `docs.php` and `config.php`.
-3. Review `config.php` for brand, author, release and maintenance settings.
-4. Open `index.php` and `docs.php`; verify search, code-copy buttons, badges and downloads.
-
-For a local preview:
-
-```bash
-php -S 127.0.0.1:8080 -t website
-```
-
-Open `http://127.0.0.1:8080/`. Routes work from a subdirectory without URL rewriting.
-Badges and syntax highlighting use external services/CDNs; the documentation remains readable
-without them. No hosting deployment is performed by the package or release workflow.
+[ndtan.net](https://ndtan.net) is the project's website. Website source and deployment
+are managed separately from this library repository; GitHub contains the PHP framework,
+its tests and release documentation only.
 
 ## License
 

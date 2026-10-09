@@ -42,11 +42,6 @@ jobs:
       - name: Run PHPUnit
         run: vendor/bin/phpunit --display-deprecations --fail-on-warning --fail-on-risky
 
-      - name: Check website documentation
-        run: |
-          find website -name '*.php' -print0 | xargs -0 -n1 php -l
-          php website/tests/docs-check.php
-
   databases:
     runs-on: ubuntu-latest
     services:

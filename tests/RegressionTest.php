@@ -10,11 +10,10 @@ final class RegressionTest extends TestCase
     public function testReleaseDocumentationAndQuickStart(): void
     {
         $root = dirname(__DIR__);
-        $config = require $root . '/website/config.php';
         $readme = file_get_contents($root . '/README.md');
-        $this->assertSame(DBF::VERSION, $config['version']);
         $this->assertStringContainsString('/releases/download/v' . DBF::VERSION . '/DBF.php', $readme);
-        $this->assertStringContainsString('/web3-v' . DBF::VERSION . '.zip', $readme);
+        $this->assertStringNotContainsString('website/', $readme);
+        $this->assertStringNotContainsString('<h1', $readme);
         $this->assertStringContainsString('## ' . DBF::VERSION . ' - ', file_get_contents($root . '/CHANGELOG.md'));
         $this->assertFileExists($root . '/assets/brand/logo.png');
         preg_match_all('/```php\R(.*?)\R```/s', $readme, $matches);
