@@ -23,7 +23,7 @@ final class DBFTest extends TestCase
                 ],
             ],
         ]);
-        // Create table with necessary columns and UNIQUE constraint
+
         $this->db->raw('CREATE TABLE users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             email TEXT NOT NULL UNIQUE,
@@ -32,32 +32,29 @@ final class DBFTest extends TestCase
             data TEXT,
             deleted_at TEXT
         )');
-        // Add logger for debugging
-        $this->db->setLogger(function($sql, $params, $ms) {
-            file_put_contents('php://stderr', "SQL: $sql\nParams: " . json_encode($params) . "\n");
-        });
+
     }
 
     public function testInsertSelectUpdateDelete(): void
     {
-        // Insert a record
+
         $this->db->table('users')->insert([
             'email' => 'a@ndtan.net',
             'status' => 'active',
             'score' => 10,
         ]);
-        // Select to verify insertion
+
         $row = $this->db->table('users')->select(['email'])->where('email', '=', 'a@ndtan.net')->first();
         $this->assertSame('a@ndtan.net', $row['email']);
-        // Update the record
+
         $this->db->table('users')->where('email', '=', 'a@ndtan.net')->update(['score' => 20]);
         $row = $this->db->table('users')->select(['score'])->where('email', '=', 'a@ndtan.net')->first();
         $this->assertSame(20, $row['score']);
-        // Soft delete
+
         $this->db->table('users')->where('email', '=', 'a@ndtan.net')->delete();
         $row = $this->db->table('users')->where('email', '=', 'a@ndtan.net')->first();
         $this->assertNull($row);
-        // Verify soft delete with withTrashed
+
         $row = $this->db->table('users')->withTrashed()->where('email', '=', 'a@ndtan.net')->first();
         $this->assertNotNull($row['deleted_at'], 'Soft delete should set deleted_at');
     }
@@ -87,13 +84,13 @@ final class DBFTest extends TestCase
 
     public function testUpsert(): void
     {
-        // Initial insert
+
         $this->db->table('users')->insert([
             'email' => 'e@ndtan.net',
             'status' => 'active',
             'score' => 40,
         ]);
-        // Upsert to update status
+
         $count = $this->db->table('users')->upsert(
             ['email' => 'e@ndtan.net', 'status' => 'vip', 'score' => 50],
             ['email'],
@@ -107,19 +104,19 @@ final class DBFTest extends TestCase
 
     public function testScopeAndPolicy(): void
     {
-        // Insert test data
+
         $this->db->table('users')->insertMany([
             ['email' => 's1@ndtan.net', 'status' => 'active', 'score' => 100],
             ['email' => 's2@ndtan.net', 'status' => 'inactive', 'score' => 200],
         ]);
-        // Apply scope
+
         $db = $this->db->withScope(['status' => 'active']);
         $row = $db->table('users')->select(['email'])->where('email', '=', 's1@ndtan.net')->first();
         $this->assertSame('s1@ndtan.net', $row['email']);
-        // Verify scope filters out inactive
+
         $row = $db->table('users')->select(['email'])->where('email', '=', 's2@ndtan.net')->first();
         $this->assertNull($row);
-        // Test policy
+
         $db = $db->policy(function($ctx) {
             if ($ctx['type'] === 'select' && $ctx['table'] === 'users') {
                 return;
@@ -201,11 +198,9 @@ final class DBFTest extends TestCase
 
     public function testWhereJson(): void
     {
-        // Check for SQLite json1 extension
+
         $pdo = $this->db->choosePdo('select');
-        if ($pdo->getAttribute(PDO::ATTR_DRIVER_NAME) === 'sqlite' && !in_array('json1', $pdo->query('PRAGMA compile_options')->fetchAll(PDO::FETCH_COLUMN))) {
-            $this->markTestSkipped('SQLite json1 extension not enabled');
-        }
+        $this->assertSame(1, (int)$pdo->query("SELECT json_valid('{}')")->fetchColumn());
         $this->db->table('users')->insert([
             'email' => 'p@ndtan.net',
             'data' => json_encode(['name' => 'John']),
@@ -216,11 +211,9 @@ final class DBFTest extends TestCase
 
     public function testJsonSet(): void
     {
-        // Check for SQLite json1 extension
+
         $pdo = $this->db->choosePdo('select');
-        if ($pdo->getAttribute(PDO::ATTR_DRIVER_NAME) === 'sqlite' && !in_array('json1', $pdo->query('PRAGMA compile_options')->fetchAll(PDO::FETCH_COLUMN))) {
-            $this->markTestSkipped('SQLite json1 extension not enabled');
-        }
+        $this->assertSame(1, (int)$pdo->query("SELECT json_valid('{}')")->fetchColumn());
         $this->db->table('users')->insert([
             'email' => 'q@ndtan.net',
             'data' => json_encode(['name' => 'Jane']),
@@ -258,7 +251,7 @@ final class DBFTest extends TestCase
 
     public function testVersionAndQualifiedIdentifiers(): void
     {
-        $this->assertSame('0.2.0', DBF::VERSION);
+        $this->assertSame('0.3.0', DBF::VERSION);
         $this->db->raw('CREATE TABLE profiles (id INTEGER PRIMARY KEY, user_id INTEGER, name TEXT)');
         $this->db->table('users')->insert(['id' => 1, 'email' => 'a@ndtan.net']);
         $this->db->table('profiles')->insert(['id' => 1, 'user_id' => 1, 'name' => 'Tony']);

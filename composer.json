@@ -1,9 +1,9 @@
 {
   "name": "ndtan/dbf",
-  "description": "Single-file PHP Database Framework — secure, PRO & Enterprise+ features.",
+  "description": "Single-file PHP SQL framework with PDO, transactions, JSON and read/write routing.",
   "type": "library",
   "license": "MIT",
-  "autoload": { "psr-4": { "ndtan\\": "src/" } },
+  "autoload": { "classmap": ["src/DBF.php"] },
   "require": { "php": ">=8.1", "ext-pdo": "*" },
   "require-dev": { "phpunit/phpunit": "^10.5 || ^11.0" },
   "scripts": { "test": "phpunit" }

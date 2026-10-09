@@ -10,7 +10,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        php: ['8.1', '8.2', '8.3', '8.4']
+        php: ['8.1', '8.2', '8.3', '8.4', '8.5']
 
     steps:
       - name: Checkout
@@ -39,15 +39,40 @@ jobs:
       - name: Dump autoload (optimize)
         run: composer dump-autoload -o
 
-      - name: Run PHPUnit (auto-detect 10/11)
-        shell: bash
+      - name: Run PHPUnit
+        run: vendor/bin/phpunit --display-deprecations --fail-on-warning --fail-on-risky
+
+      - name: Check website documentation
         run: |
-          set -e
-          VER="$(vendor/bin/phpunit --version | awk '{print $2}')"
-          MAJOR="${VER%%.*}"
-          echo "Detected PHPUnit $VER (major=$MAJOR)"
-          if [ "$MAJOR" -ge 11 ]; then
-            vendor/bin/phpunit --display-deprecations --colors=always
-          else
-            vendor/bin/phpunit --display-deprecations --colors=always --v
-          fi
+          find website -name '*.php' -print0 | xargs -0 -n1 php -l
+          php website/tests/docs-check.php
+
+  databases:
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: dbf_test
+          MYSQL_DATABASE: dbf_test
+        ports: ['3306:3306']
+        options: --health-cmd="mysqladmin ping -h localhost -pdbf_test" --health-interval=10s --health-timeout=5s --health-retries=10
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: dbf_test
+          POSTGRES_DB: dbf_test
+        ports: ['5432:5432']
+        options: --health-cmd="pg_isready -U postgres" --health-interval=10s --health-timeout=5s --health-retries=10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          extensions: pdo_mysql, pdo_pgsql, pdo_sqlite, mbstring
+          tools: composer:v2
+      - run: composer install --no-interaction --prefer-dist --no-progress
+      - run: vendor/bin/phpunit --filter DriverTest --fail-on-warning --fail-on-risky
+        env:
+          DBF_TEST_MYSQL: mysql:host=127.0.0.1;port=3306;dbname=dbf_test
+          DBF_TEST_PGSQL: pgsql:host=127.0.0.1;port=5432;dbname=dbf_test
